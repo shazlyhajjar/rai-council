@@ -1,4 +1,10 @@
-"""3-stage LLM Council orchestration."""
+"""3-stage LLM Council orchestration (6-member version, post-DR/v2).
+
+Stage 1 — every council member responds (role-aware in roles modes).
+Stage 2 — cross-team peer review: strategists rank builders, builders rank
+          strategists. One ranking call per reviewer, 6 calls total.
+Stage 3 — chairman synthesizes with explicit strategist/builder grouping.
+"""
 
 from typing import List, Dict, Any, Optional, Tuple
 from .openrouter import (
@@ -6,7 +12,7 @@ from .openrouter import (
     query_models_parallel_per_messages,
     query_model,
 )
-from .config import COUNCIL_MODELS, CHAIRMAN_MODEL
+from .config import COUNCIL_MODELS, CHAIRMAN_MODEL, tier_for
 from .context import get_brief
 from .modes import (
     get_mode,
@@ -120,6 +126,7 @@ async def stage1_collect_responses(
                     "model": model,
                     "response": response.get("content", ""),
                     "role": role.get("name"),
+                    "tier": tier_for(model),
                 }
             )
         return results
@@ -129,7 +136,11 @@ async def stage1_collect_responses(
     messages = _system_message() + [{"role": "user", "content": user_query}]
     responses = await query_models_parallel(COUNCIL_MODELS, messages)
     return [
-        {"model": model, "response": response.get("content", "")}
+        {
+            "model": model,
+            "response": response.get("content", ""),
+            "tier": tier_for(model),
+        }
         for model, response in responses.items()
         if response is not None
     ]
@@ -139,10 +150,10 @@ async def debate_round1(
     user_query: str,
     mode_def: Dict,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
-    """Architecture Debate round 1 — randomized stances, parallel.
+    """Architecture Debate round 1 — tier-balanced stances, parallel.
 
     Returns (results, stance_map). `results` is shaped like stage1 so the
-    frontend can reuse the same renderer; each entry carries `stance`.
+    frontend can reuse the same renderer; each entry carries `stance` + `tier`.
     """
     stance_map = assign_stances(COUNCIL_MODELS)
     per_model_messages = {
@@ -160,6 +171,7 @@ async def debate_round1(
                 "model": model,
                 "response": response.get("content", ""),
                 "stance": stance_map[model],
+                "tier": tier_for(model),
             }
         )
     return results, stance_map
@@ -202,38 +214,14 @@ async def debate_round2(
                 "model": model,
                 "response": response.get("content", ""),
                 "stance": stance_map[model],
+                "tier": tier_for(model),
             }
         )
     return results
 
 
-async def stage2_collect_rankings(
-    user_query: str,
-    stage1_results: List[Dict[str, Any]],
-) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
-    """Stage 2: each model ranks the anonymized stage 1 responses."""
-    labels = [chr(65 + i) for i in range(len(stage1_results))]  # A, B, C, ...
-
-    label_to_model = {
-        f"Response {label}": result["model"]
-        for label, result in zip(labels, stage1_results)
-    }
-
-    responses_text = "\n\n".join(
-        f"Response {label}:\n{result['response']}"
-        for label, result in zip(labels, stage1_results)
-    )
-
-    ranking_prompt = f"""You are evaluating different responses to the following question:
-
-Question: {user_query}
-
-Here are the responses from different models (anonymized):
-
-{responses_text}
-
-Your task:
-1. First, evaluate each response individually. For each response, explain what it does well and what it does poorly.
+_RANKING_FORMAT_INSTRUCTIONS = """Your task:
+1. First, evaluate each response individually. For each response, explain what it does well and what it does poorly through the lens of your own role.
 2. Then, at the very end of your response, provide a final ranking.
 
 IMPORTANT: Your final ranking MUST be formatted EXACTLY as follows:
@@ -255,8 +243,71 @@ FINAL RANKING:
 
 Now provide your evaluation and ranking:"""
 
-    messages = _system_message() + [{"role": "user", "content": ranking_prompt}]
-    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+
+def _build_cross_review_prompt(
+    user_query: str, responses_text: str, reviewed_tier_label: str
+) -> str:
+    """Prompt for a single cross-review ranking call.
+
+    `reviewed_tier_label` is "BUILDER" or "STRATEGIST" — appears in the prompt
+    so the reviewer knows whose work they're rating.
+    """
+    return f"""You are evaluating {reviewed_tier_label} responses to the following question.
+
+Question: {user_query}
+
+Here are the {reviewed_tier_label.lower()} responses, anonymized:
+
+{responses_text}
+
+{_RANKING_FORMAT_INSTRUCTIONS}"""
+
+
+async def _stage2_cross_review(
+    user_query: str,
+    strategist_responses: List[Dict[str, Any]],
+    builder_responses: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, str]]]:
+    """Run the cross-review pattern: each strategist ranks the builders, each
+    builder ranks the strategists. 6 parallel ranking calls total.
+    """
+    # Anonymize each team independently with labels A, B, C…
+    builder_labels = [chr(65 + i) for i in range(len(builder_responses))]
+    strategist_labels = [chr(65 + i) for i in range(len(strategist_responses))]
+
+    builders_label_to_model = {
+        f"Response {label}": r["model"]
+        for label, r in zip(builder_labels, builder_responses)
+    }
+    strategists_label_to_model = {
+        f"Response {label}": r["model"]
+        for label, r in zip(strategist_labels, strategist_responses)
+    }
+
+    builders_text = "\n\n".join(
+        f"Response {label}:\n{r['response']}"
+        for label, r in zip(builder_labels, builder_responses)
+    )
+    strategists_text = "\n\n".join(
+        f"Response {label}:\n{r['response']}"
+        for label, r in zip(strategist_labels, strategist_responses)
+    )
+
+    # Strategists rank builders; builders rank strategists.
+    strategist_prompt = _build_cross_review_prompt(user_query, builders_text, "BUILDER")
+    builder_prompt = _build_cross_review_prompt(user_query, strategists_text, "STRATEGIST")
+
+    per_model_messages: Dict[str, List[Dict[str, str]]] = {}
+    for r in strategist_responses:
+        per_model_messages[r["model"]] = _system_message() + [
+            {"role": "user", "content": strategist_prompt}
+        ]
+    for r in builder_responses:
+        per_model_messages[r["model"]] = _system_message() + [
+            {"role": "user", "content": builder_prompt}
+        ]
+
+    responses = await query_models_parallel_per_messages(per_model_messages)
 
     stage2_results: List[Dict[str, Any]] = []
     for model, response in responses.items():
@@ -266,12 +317,92 @@ Now provide your evaluation and ranking:"""
         stage2_results.append(
             {
                 "model": model,
+                "reviewer_tier": tier_for(model),
                 "ranking": full_text,
                 "parsed_ranking": parse_ranking_from_text(full_text),
             }
         )
 
+    label_to_model = {
+        "builders": builders_label_to_model,
+        "strategists": strategists_label_to_model,
+    }
     return stage2_results, label_to_model
+
+
+async def _stage2_full_mesh(
+    user_query: str,
+    stage1_results: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, str]]]:
+    """Original full-mesh peer ranking — every model ranks all responses.
+
+    Used as a fallback when cross-review can't run (one tier ended up empty
+    because every model in that tier failed). Wraps the flat label_to_model
+    in the new dict-of-dicts shape under an "all" key so callers can handle
+    both modes uniformly.
+    """
+    labels = [chr(65 + i) for i in range(len(stage1_results))]
+
+    label_to_model = {
+        f"Response {label}": r["model"]
+        for label, r in zip(labels, stage1_results)
+    }
+
+    responses_text = "\n\n".join(
+        f"Response {label}:\n{r['response']}"
+        for label, r in zip(labels, stage1_results)
+    )
+
+    ranking_prompt = (
+        f"You are evaluating different responses to the following question.\n\n"
+        f"Question: {user_query}\n\n"
+        f"Here are the responses from different models (anonymized):\n\n"
+        f"{responses_text}\n\n"
+        f"{_RANKING_FORMAT_INSTRUCTIONS}"
+    )
+
+    messages = _system_message() + [{"role": "user", "content": ranking_prompt}]
+    responses = await query_models_parallel(
+        [r["model"] for r in stage1_results], messages
+    )
+
+    stage2_results: List[Dict[str, Any]] = []
+    for model, response in responses.items():
+        if response is None:
+            continue
+        full_text = response.get("content", "")
+        stage2_results.append(
+            {
+                "model": model,
+                "reviewer_tier": tier_for(model),
+                "ranking": full_text,
+                "parsed_ranking": parse_ranking_from_text(full_text),
+            }
+        )
+
+    return stage2_results, {"all": label_to_model}
+
+
+async def stage2_collect_rankings(
+    user_query: str,
+    stage1_results: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, str]]]:
+    """Stage 2: cross-team peer review.
+
+    Strategists rank the builders' responses; builders rank the strategists'.
+    Returns (rankings, label_to_model) where label_to_model is shaped as
+    `{"builders": {"Response A": model_id, …}, "strategists": {…}}`.
+
+    If one tier ended up empty (every model in it failed Stage 1), falls back
+    to full-mesh ranking over the survivors and returns label_to_model as
+    `{"all": {…}}`.
+    """
+    strategists = [r for r in stage1_results if tier_for(r["model"]) == "strategist"]
+    builders = [r for r in stage1_results if tier_for(r["model"]) == "builder"]
+
+    if strategists and builders:
+        return await _stage2_cross_review(user_query, strategists, builders)
+    return await _stage2_full_mesh(user_query, stage1_results)
 
 
 async def stage3_synthesize_final(
@@ -280,38 +411,102 @@ async def stage3_synthesize_final(
     stage2_results: List[Dict[str, Any]],
     mode_def: Optional[Dict] = None,
 ) -> Dict[str, Any]:
-    """Stage 3 (roles / free-chat): Chairman synthesizes from responses + rankings."""
-    stage1_text = "\n\n".join(
-        f"Model: {r['model']}"
-        + (f" (role: {r['role']})" if r.get("role") else "")
-        + f"\nResponse: {r['response']}"
-        for r in stage1_results
-    )
-    stage2_text = "\n\n".join(
-        f"Model: {r['model']}\nRanking: {r['ranking']}" for r in stage2_results
-    )
+    """Stage 3 (roles / free-chat): Chairman synthesizes with team grouping."""
+
+    strategists = [r for r in stage1_results if tier_for(r["model"]) == "strategist"]
+    builders = [r for r in stage1_results if tier_for(r["model"]) == "builder"]
+
+    strats_reviewing_builders = [
+        r for r in stage2_results if r.get("reviewer_tier") == "strategist"
+    ]
+    builders_reviewing_strats = [
+        r for r in stage2_results if r.get("reviewer_tier") == "builder"
+    ]
+
+    def _fmt_responses(items: List[Dict[str, Any]]) -> str:
+        if not items:
+            return "(no responses from this team)"
+        return "\n\n".join(
+            f"Model: {r['model']}"
+            + (f" (role: {r['role']})" if r.get("role") else "")
+            + f"\nResponse: {r['response']}"
+            for r in items
+        )
+
+    def _fmt_rankings(items: List[Dict[str, Any]]) -> str:
+        if not items:
+            return "(no cross-review from this team)"
+        return "\n\n".join(
+            f"Model: {r['model']}\nReview: {r['ranking']}" for r in items
+        )
 
     mode_label = (mode_def or {}).get("label", "Council")
-    chairman_prompt = f"""You are the Chairman of an LLM Council.
+
+    # If only one tier responded (degenerate / fallback mode), drop back to the
+    # original undivided chairman prompt — keeps the output coherent.
+    if not strategists or not builders:
+        stage1_text = "\n\n".join(
+            f"Model: {r['model']}"
+            + (f" (role: {r['role']})" if r.get("role") else "")
+            + f"\nResponse: {r['response']}"
+            for r in stage1_results
+        )
+        stage2_text = "\n\n".join(
+            f"Model: {r['model']}\nRanking: {r['ranking']}" for r in stage2_results
+        )
+        chairman_prompt = (
+            f"You are the Chairman of an LLM Council.\n\n"
+            f"Mode: {mode_label}\n\n"
+            f"Original Question: {user_query}\n\n"
+            f"STAGE 1 — Individual Responses:\n{stage1_text}\n\n"
+            f"STAGE 2 — Peer Rankings:\n{stage2_text}\n\n"
+            "Synthesize this into a single, comprehensive, accurate final "
+            "answer. Be decisive. Where the council disagrees, take a "
+            "position and explain why."
+        )
+    else:
+        chairman_prompt = f"""You are the Chairman of an LLM Council with 6 members organized into two teams.
+
+STRATEGISTS — high-level reviewers. Architect, Critical Reviewer, Stress Tester.
+BUILDERS — implementation realists. Each thinks like a coding agent reading a spec for the first time and asks "what would block me from building this?"
+
+Stage 2 was cross-team peer review: each strategist ranked the builders' responses, each builder ranked the strategists'. Neither team reviewed its own work — this surfaces blind spots, not popularity contests.
 
 Mode: {mode_label}
-
-The council members each provided a response to the user's question (each from a different lens or role), then anonymously ranked each other's responses.
-
 Original Question: {user_query}
 
-STAGE 1 — Individual Responses:
-{stage1_text}
+═══════════════════════════════════════
+STRATEGIST RESPONSES
+═══════════════════════════════════════
+{_fmt_responses(strategists)}
 
-STAGE 2 — Peer Rankings:
-{stage2_text}
+═══════════════════════════════════════
+BUILDER RESPONSES
+═══════════════════════════════════════
+{_fmt_responses(builders)}
 
-Your task as Chairman: synthesize this into a single, comprehensive, accurate final answer. Consider:
-- The specific lens each member used (their role, if any).
-- Patterns of agreement and disagreement.
-- What the peer rankings reveal about which arguments carried weight.
+═══════════════════════════════════════
+STRATEGISTS' CROSS-REVIEW OF BUILDERS
+═══════════════════════════════════════
+{_fmt_rankings(strats_reviewing_builders)}
 
-Be decisive. Where the council disagrees, take a position and explain why."""
+═══════════════════════════════════════
+BUILDERS' CROSS-REVIEW OF STRATEGISTS
+═══════════════════════════════════════
+{_fmt_rankings(builders_reviewing_strats)}
+
+═══════════════════════════════════════
+YOUR TASK
+═══════════════════════════════════════
+Synthesize this into a decisive answer. Structure your response in two parts.
+
+**Part 1 — Where the teams converge and diverge:**
+- HIGH CONFIDENCE (both teams flagged it): list each point and which members raised it.
+- DISAGREEMENT (one team flags it, the other dismisses or contradicts): list each conflict and take a position.
+- SINGLE-TEAM OBSERVATIONS (only one team raised it): list each, and note whether the other team likely missed it because it's outside their lens.
+
+**Part 2 — Your verdict:**
+The decisive answer to the user's question. Be specific. Don't hedge. Where the teams disagreed, explain why you ruled the way you did."""
 
     messages = _system_message() + [{"role": "user", "content": chairman_prompt}]
     response = await query_model(CHAIRMAN_MODEL, messages)
@@ -325,19 +520,27 @@ async def stage3_synthesize_debate(
     round1: List[Dict[str, Any]],
     round2: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Stage 3 (debate): Chairman synthesizes the two debate rounds."""
-    round1_text = "\n\n".join(
-        f"Model: {r['model']} (stance: {r['stance']})\nRound 1: {r['response']}"
-        for r in round1
-    )
-    round2_text = "\n\n".join(
-        f"Model: {r['model']} (stance: {r['stance']})\nRound 2 rebuttal: {r['response']}"
-        for r in round2
-    )
+    """Stage 3 (debate): Chairman synthesizes the two debate rounds.
+
+    With 6 models and tier-balanced stances, each stance is held by one
+    strategist + one builder. The chairman is shown both axes (stance and
+    tier) so it can detect patterns like "the builders carrying the for-side
+    all surfaced practical blockers the strategists glossed over."
+    """
+
+    def _fmt_entries(items: List[Dict[str, Any]], round_label: str) -> str:
+        return "\n\n".join(
+            f"Model: {r['model']} (stance: {r['stance']}, tier: {r.get('tier', '?')})\n"
+            f"{round_label}: {r['response']}"
+            for r in items
+        )
+
+    round1_text = _fmt_entries(round1, "Round 1")
+    round2_text = _fmt_entries(round2, "Round 2 rebuttal")
 
     chairman_prompt = f"""You are the Chairman of an LLM Council adjudicating a two-round architectural debate.
 
-Each model was assigned a stance (for / against / neutral) at random and argued from that position. They were not arguing their own views — they were arguing the assigned position as forcefully as they could.
+The 6 council members are split into two teams (strategists vs. builders) and were assigned stances (for / against / neutral) at random in a way that gave each stance one strategist and one builder. They argued their assigned positions, not their own views.
 
 Original Question: {user_query}
 
@@ -347,7 +550,13 @@ ROUND 1 — Opening arguments:
 ROUND 2 — Rebuttals:
 {round2_text}
 
-Your task as Chairman: deliver a verdict. Identify which arguments survived rebuttal, which collapsed, and which trade-offs are real vs. exaggerated. Then give a clear recommendation — not "it depends," but the decision you would make and the conditions under which you'd reconsider it."""
+Deliver a verdict. Identify:
+- Which arguments survived rebuttal.
+- Which collapsed under counter-pressure.
+- Where the strategist + builder on the same stance diverged from each other (e.g., the strategist made a clean theoretical case while the builder surfaced a practical blocker that undermines it, or vice versa). These divergences are often the most interesting signal.
+- Which trade-offs are real vs. exaggerated.
+
+Then give a clear recommendation — not "it depends," but the decision you would make and the conditions under which you'd reconsider it."""
 
     messages = _system_message() + [{"role": "user", "content": chairman_prompt}]
     response = await query_model(CHAIRMAN_MODEL, messages)
@@ -376,19 +585,40 @@ def parse_ranking_from_text(ranking_text: str) -> List[str]:
 
 def calculate_aggregate_rankings(
     stage2_results: List[Dict[str, Any]],
-    label_to_model: Dict[str, str],
+    label_to_model: Dict[str, Dict[str, str]],
 ) -> List[Dict[str, Any]]:
-    """Average rank position across all peer evaluations."""
+    """Average rank position across cross-team peer evaluations.
+
+    With cross-review, each model's aggregate score reflects how its team's
+    work was judged BY THE OTHER TEAM — strategists are ranked by builders,
+    builders by strategists. Falls back to the "all" key if Stage 2 ran in
+    full-mesh fallback mode.
+    """
     from collections import defaultdict
 
-    model_positions = defaultdict(list)
+    model_positions: Dict[str, List[int]] = defaultdict(list)
+
+    # Which label map applies to a given reviewer? A strategist reviewer ranked
+    # builders → use label_to_model["builders"]. A builder reviewer ranked
+    # strategists → use label_to_model["strategists"]. Full-mesh fallback has
+    # everything under "all".
     for ranking in stage2_results:
+        reviewer_tier = ranking.get("reviewer_tier")
+        if "all" in label_to_model:
+            labels = label_to_model["all"]
+        elif reviewer_tier == "strategist":
+            labels = label_to_model.get("builders", {})
+        elif reviewer_tier == "builder":
+            labels = label_to_model.get("strategists", {})
+        else:
+            continue
+
         parsed = parse_ranking_from_text(ranking["ranking"])
         for position, label in enumerate(parsed, start=1):
-            if label in label_to_model:
-                model_positions[label_to_model[label]].append(position)
+            if label in labels:
+                model_positions[labels[label]].append(position)
 
-    aggregate = []
+    aggregate: List[Dict[str, Any]] = []
     for model, positions in model_positions.items():
         if positions:
             aggregate.append(
@@ -426,10 +656,10 @@ async def run_full_council(
 ) -> Tuple[List, List, Dict, Dict]:
     """Run the complete 3-stage council process, mode-aware.
 
-    Roles & free-chat modes: stage1 = role-aware responses, stage2 = peer
-    ranking, stage3 = chairman synthesis.
+    Roles & free-chat modes: stage1 = role-aware responses, stage2 = cross-
+    team peer review, stage3 = chairman synthesis with tier grouping.
 
-    Debate mode: stage1 = round 1 (randomized stances), stage2 = round 2
+    Debate mode: stage1 = round 1 (tier-balanced stances), stage2 = round 2
     rebuttals (NOT a ranking), stage3 = chairman verdict.
     """
     mode_def = get_mode(mode_key)

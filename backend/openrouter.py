@@ -1,5 +1,7 @@
 """OpenRouter API client for making LLM requests."""
 
+import sys
+import traceback
 import httpx
 from typing import List, Dict, Any, Optional
 from .config import OPENROUTER_API_KEY, OPENROUTER_API_URL
@@ -50,8 +52,26 @@ async def query_model(
                 'reasoning_details': message.get('reasoning_details')
             }
 
+    except httpx.HTTPStatusError as e:
+        # Provider returned 4xx/5xx — log the body so we can see what OpenRouter
+        # actually said (rate limit, model unavailable, invalid params, etc.).
+        body_preview = e.response.text[:500] if e.response is not None else "(no body)"
+        print(
+            f"[openrouter] {model} → HTTP {e.response.status_code}: {body_preview}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
     except Exception as e:
-        print(f"Error querying model {model}: {e}")
+        # Anything else (timeout, connection error, JSON parse, KeyError on the
+        # response shape, …). Print the traceback so silent fall-through stops
+        # being silent.
+        tb = traceback.format_exc()
+        print(
+            f"[openrouter] {model} → unexpected error: {e}\n{tb}",
+            file=sys.stderr,
+            flush=True,
+        )
         return None
 
 

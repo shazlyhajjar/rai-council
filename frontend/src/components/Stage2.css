@@ -151,3 +151,33 @@
   color: #999;
   font-size: 12px;
 }
+
+.cross-review-section {
+  margin: 0 0 28px 0;
+  padding-bottom: 4px;
+}
+
+.cross-review-section + .cross-review-section {
+  border-top: 1px solid #e7e7e7;
+  padding-top: 20px;
+}
+
+.cross-review-heading {
+  margin: 0 0 8px 0;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.rank-tier-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border-radius: 10px;
+  background: #eef2ff;
+  color: #4338ca;
+}

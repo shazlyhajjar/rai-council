@@ -3,17 +3,19 @@
 Each mode defines:
 - A system prompt every model receives.
 - A `flow` ("roles" or "debate") that selects the orchestration shape.
-- For "roles": a per-provider role assignment (Claude/Gemini/GPT each get a different lens).
-- For "debate": a list of stances that are randomly assigned to models on every run.
-
-The provider key is derived from the OpenRouter model id prefix
-(`anthropic/claude-opus-4.7` -> `anthropic`). If the council roster ever
-adds a model whose prefix is not mapped, that model runs without a role
-(its response is still collected, just without role-specific framing).
+- For "roles": per-MODEL role assignment. With 6 council members split into
+  strategists and builders, roles are keyed by full OpenRouter model id (not
+  by provider prefix as in v1) so two models from the same provider can hold
+  different roles.
+- For "debate": a list of stances that are assigned in a tier-balanced way —
+  each stance gets one strategist and one builder so neither team dominates
+  any single position.
 """
 
 import random
 from typing import Dict, List, Optional
+
+from .config import tier_for
 
 
 SPEC_REVIEW_SYSTEM_PROMPT = (
@@ -39,14 +41,17 @@ CODE_REVIEW_SYSTEM_PROMPT = (
 )
 
 
+# Per-mode role prompts, keyed by full OpenRouter model id. Each tier has 3
+# slots; strategists set the lens, builders set the implementation reality.
 MODES: Dict[str, Dict] = {
     "spec_review": {
         "label": "Spec Review",
-        "description": "Each model reviews a spec through a different lens.",
+        "description": "Each model reviews a spec through a different lens. Strategists set the lens, builders flag what would block implementation.",
         "system_prompt": SPEC_REVIEW_SYSTEM_PROMPT,
         "flow": "roles",
         "roles": {
-            "anthropic": {
+            # ── Strategists ────────────────────────────────────────────
+            "anthropic/claude-opus-4.7": {
                 "name": "Architect",
                 "prompt": (
                     "Your specific role is the Architect. Focus on structural "
@@ -56,7 +61,7 @@ MODES: Dict[str, Dict] = {
                     "is implied but never spelled out."
                 ),
             },
-            "google": {
+            "google/gemini-3.1-pro-preview": {
                 "name": "Critical Reviewer",
                 "prompt": (
                     "Your specific role is the Critical Reviewer. Hunt for gaps "
@@ -67,7 +72,7 @@ MODES: Dict[str, Dict] = {
                     "must be named."
                 ),
             },
-            "openai": {
+            "openai/gpt-5.4": {
                 "name": "Stress Tester",
                 "prompt": (
                     "Your specific role is the Stress Tester. Imagine adversarial "
@@ -77,22 +82,63 @@ MODES: Dict[str, Dict] = {
                     "Surface every edge case the spec does not address."
                 ),
             },
+            # ── Builders ───────────────────────────────────────────────
+            "openai/gpt-5.3-codex": {
+                "name": "Implementation Realist",
+                "prompt": (
+                    "Your specific role is the Implementation Realist. Read this "
+                    "spec as the developer who has to build it. If you opened a "
+                    "ticket with 'implement this' right now, what would block "
+                    "you from writing the first commit? Look for: terms "
+                    "introduced but never defined, happy-path flows with no "
+                    "input-validation story, behaviors mentioned in passing "
+                    "with no place to live in the architecture. Point at the "
+                    "exact phrase that's ambiguous and say what's missing to "
+                    "make it actionable."
+                ),
+            },
+            "anthropic/claude-sonnet-4.6": {
+                "name": "Build Verifier",
+                "prompt": (
+                    "Your specific role is the Build Verifier. Ask 'can I write "
+                    "tests against this spec?' Are inputs and outputs of each "
+                    "capability fully specified so I can write assertions? Are "
+                    "component boundaries crisp enough that I know where to "
+                    "mock? Is the state machine drawn out, or will I discover "
+                    "it by trial and error? Flag every gap that would force me "
+                    "to make undocumented decisions during build."
+                ),
+            },
+            "google/gemini-3-flash-preview": {
+                "name": "Feasibility Auditor",
+                "prompt": (
+                    "Your specific role is the Feasibility Auditor. Look at "
+                    "performance assumptions (latency targets, payload sizes, "
+                    "request volumes), dependencies that must exist before "
+                    "this can be built (other services, migrations, third-"
+                    "party access), and build sequencing — what has to ship "
+                    "first. Where would this collapse at 10× scale? Surface "
+                    "every implicit assumption the spec is leaning on without "
+                    "naming."
+                ),
+            },
         },
     },
     "architecture_debate": {
         "label": "Architecture Debate",
-        "description": "Two debate rounds with randomized stances before synthesis.",
+        "description": "Two debate rounds with stances assigned across both teams (each stance held by one strategist + one builder) before chairman synthesis.",
         "system_prompt": ARCHITECTURE_DEBATE_SYSTEM_PROMPT,
         "flow": "debate",
         "stances": ["for", "against", "neutral"],
     },
     "code_review": {
         "label": "Code Review",
-        "description": "Multi-lens production code review.",
+        "description": "Multi-lens production code review. Strategists pick at correctness and design, builders flag what would block extending or testing.",
         "system_prompt": CODE_REVIEW_SYSTEM_PROMPT,
         "flow": "roles",
         "roles": {
-            "anthropic": {
+            # ── Strategists ────────────────────────────────────────────
+            "anthropic/claude-opus-4.7": {
                 "name": "Security & Patterns",
                 "prompt": (
                     "Your specific focus is Security & Patterns. Look for: "
@@ -102,7 +148,7 @@ MODES: Dict[str, Dict] = {
                     "or constructs."
                 ),
             },
-            "google": {
+            "google/gemini-3.1-pro-preview": {
                 "name": "Performance & Scale",
                 "prompt": (
                     "Your specific focus is Performance & Scale. Look for: N+1 "
@@ -112,7 +158,7 @@ MODES: Dict[str, Dict] = {
                     "specific lines or constructs."
                 ),
             },
-            "openai": {
+            "openai/gpt-5.4": {
                 "name": "Edge Cases & Error Handling",
                 "prompt": (
                     "Your specific focus is Edge Cases & Error Handling. Look "
@@ -120,6 +166,41 @@ MODES: Dict[str, Dict] = {
                     "exceptions, race conditions, off-by-one errors, "
                     "double-free/double-close, and surprising input "
                     "combinations. Cite specific lines or constructs."
+                ),
+            },
+            # ── Builders ───────────────────────────────────────────────
+            "openai/gpt-5.3-codex": {
+                "name": "Extensibility Realist",
+                "prompt": (
+                    "Your specific focus is Extensibility Realism. You are the "
+                    "developer who has to extend this code next week. Flag "
+                    "every place where existing patterns are unclear, where "
+                    "naming makes you guess intent, where understanding the "
+                    "contract requires reading three files. Point at the "
+                    "specific lines that would slow down the next implementer."
+                ),
+            },
+            "anthropic/claude-sonnet-4.6": {
+                "name": "Test Seam Verifier",
+                "prompt": (
+                    "Your specific focus is Test Seams. You are the engineer "
+                    "asked to write tests for this code as-is. Where are the "
+                    "seams unclear? Which functions take inputs that aren't "
+                    "fully specified so you can't draft a test matrix? Where "
+                    "does behavior depend on global or hidden state that won't "
+                    "surface in unit tests? Where would you have to refactor "
+                    "just to test it?"
+                ),
+            },
+            "google/gemini-3-flash-preview": {
+                "name": "Async & Dependency Auditor",
+                "prompt": (
+                    "Your specific focus is Async, Performance & Dependency "
+                    "Risk. Look for: blocking I/O in async paths, sequential "
+                    "awaits that should be parallel, hidden N+1 patterns, "
+                    "dependency surfaces that grew without a barrier, "
+                    "build-order coupling (one module silently requires "
+                    "another to initialize first). Be specific — cite lines."
                 ),
             },
         },
@@ -151,26 +232,43 @@ def get_mode(mode_key: Optional[str]) -> Optional[Dict]:
     return MODES.get(mode_key)
 
 
-def provider_key(model_id: str) -> str:
-    """Provider prefix from a model id ('anthropic/claude-opus-4.7' -> 'anthropic')."""
-    return model_id.split("/", 1)[0]
-
-
 def assign_role(model_id: str, mode_def: Optional[Dict]) -> Optional[Dict]:
-    """Role for a model under a `roles`-flow mode, or None."""
+    """Role for a model under a `roles`-flow mode, or None.
+
+    Keyed by full model id (e.g. 'anthropic/claude-sonnet-4.6') so two models
+    from the same provider can hold different roles.
+    """
     if not mode_def or mode_def.get("flow") != "roles":
         return None
-    return mode_def.get("roles", {}).get(provider_key(model_id))
+    return mode_def.get("roles", {}).get(model_id)
 
 
 def assign_stances(model_ids: List[str]) -> Dict[str, str]:
-    """Randomly assign for/against/neutral across the council each run.
+    """Assign for/against/neutral stances across the council.
 
-    If there are more models than stances, the extra models cycle through
-    the same three labels — keeps the assignment deterministic for the
-    rest of the pipeline.
+    With the canonical 3 strategists + 3 builders roster, each stance gets one
+    strategist and one builder — neither team dominates a single position.
+    The order within each team is randomized per call so debates don't become
+    predictable.
+
+    Falls back to the original cycle behavior if the roster isn't balanced 3+3
+    (e.g. a model failed earlier and got filtered out).
     """
     stances = ["for", "against", "neutral"]
+
+    strategists = [m for m in model_ids if tier_for(m) == "strategist"]
+    builders = [m for m in model_ids if tier_for(m) == "builder"]
+
+    if len(strategists) == 3 and len(builders) == 3:
+        random.shuffle(strategists)
+        random.shuffle(builders)
+        balanced: Dict[str, str] = {}
+        for stance, s_model, b_model in zip(stances, strategists, builders):
+            balanced[s_model] = stance
+            balanced[b_model] = stance
+        return balanced
+
+    # Off-spec roster — cycle the three stances across whatever models we have.
     random.shuffle(stances)
     if len(model_ids) > len(stances):
         repeats = (len(model_ids) // len(stances)) + 1

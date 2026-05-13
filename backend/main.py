@@ -8,6 +8,8 @@ from typing import List, Dict, Any, Optional
 import uuid
 import json
 import asyncio
+import sys
+import traceback
 
 from . import storage
 from .council import (
@@ -64,6 +66,8 @@ def _build_model_positions(stage1: List[Dict[str, Any]]) -> List[Dict[str, Any]]
             pos["role"] = r["role"]
         if r.get("stance"):
             pos["stance"] = r["stance"]
+        if r.get("tier"):
+            pos["tier"] = r["tier"]
         positions.append(pos)
     return positions
 
@@ -393,9 +397,36 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             # Send completion event
             yield f"data: {json.dumps({'type': 'complete'})}\n\n"
 
+        except asyncio.CancelledError:
+            # The client disconnected (browser navigated away / refreshed mid-
+            # stream). Log it so the next time we see "user msg saved but no
+            # assistant msg" we know whether it was a client disconnect vs an
+            # actual server-side bug. Re-raise so the runtime can finish
+            # cancelling the task cleanly.
+            print(
+                f"[stream] client disconnected mid-stream for conv "
+                f"{conversation_id} (mode={mode_key})",
+                file=sys.stderr,
+                flush=True,
+            )
+            raise
         except Exception as e:
-            # Send error event
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            # Full traceback to stderr — the SSE catch-all used to swallow
+            # everything silently, leaving no fingerprint. Now any future
+            # failure shows up in the backend log.
+            tb = traceback.format_exc()
+            print(
+                f"[stream] error during conv {conversation_id} "
+                f"(mode={mode_key}):\n{tb}",
+                file=sys.stderr,
+                flush=True,
+            )
+            try:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            except Exception:
+                # If even the error yield fails (e.g. client already gone),
+                # don't compound the failure.
+                pass
 
     return StreamingResponse(
         event_generator(),

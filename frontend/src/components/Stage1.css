@@ -13,10 +13,38 @@
   font-weight: 600;
 }
 
+.tier-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.tier-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tier-group-header {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: #6b7280;
+}
+
+.tier-group.tier-strategist .tier-group-header {
+  color: #7c3aed;
+}
+
+.tier-group.tier-builder .tier-group-header {
+  color: #db2777;
+}
+
 .tabs {
   display: flex;
   gap: 8px;
-  margin-bottom: 16px;
   flex-wrap: wrap;
 }
 
