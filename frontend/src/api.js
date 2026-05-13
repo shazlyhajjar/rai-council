@@ -6,6 +6,68 @@ const API_BASE = 'http://localhost:8001';
 
 export const api = {
   /**
+   * Fetch the RAI Council Brief content + metadata.
+   * Returns { loaded, path, chars, words, lines, updated_at, content }.
+   */
+  async getContext() {
+    const response = await fetch(`${API_BASE}/api/context`);
+    if (!response.ok) {
+      throw new Error('Failed to load council context');
+    }
+    return response.json();
+  },
+
+  /**
+   * Replace the RAI Council Brief on disk.
+   * Returns the same shape as getContext().
+   */
+  async setContext(content) {
+    const response = await fetch(`${API_BASE}/api/context`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to save council context');
+    }
+    return response.json();
+  },
+
+  /**
+   * List verdicts, newest first. Optional filters: mode, decision (accept|override|undecided).
+   */
+  async listVerdicts({ mode, decision, limit = 200 } = {}) {
+    const params = new URLSearchParams();
+    if (mode) params.set('mode', mode);
+    if (decision) params.set('decision', decision);
+    if (limit) params.set('limit', String(limit));
+    const qs = params.toString();
+    const response = await fetch(`${API_BASE}/api/verdicts${qs ? `?${qs}` : ''}`);
+    if (!response.ok) throw new Error('Failed to list verdicts');
+    return response.json();
+  },
+
+  async getVerdict(verdictId) {
+    const response = await fetch(`${API_BASE}/api/verdicts/${verdictId}`);
+    if (!response.ok) throw new Error('Failed to load verdict');
+    return response.json();
+  },
+
+  /**
+   * Mark a verdict as accepted or overridden. `reasoning` is only used for overrides.
+   */
+  async decideVerdict(verdictId, decision, reasoning = null) {
+    const response = await fetch(`${API_BASE}/api/verdicts/${verdictId}/decision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision, reasoning }),
+    });
+    if (!response.ok) throw new Error('Failed to save decision');
+    return response.json();
+  },
+
+
+  /**
    * List all conversations.
    */
   async listConversations() {
@@ -48,8 +110,12 @@ export const api = {
 
   /**
    * Send a message in a conversation.
+   * @param {string} conversationId - The conversation ID
+   * @param {string} content - The message content
+   * @param {string|null} mode - Operating mode key, or null for free chat
+   * @param {string|null} attachment - Optional text/markdown context
    */
-  async sendMessage(conversationId, content) {
+  async sendMessage(conversationId, content, mode = null, attachment = null) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message`,
       {
@@ -57,7 +123,7 @@ export const api = {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, mode, attachment }),
       }
     );
     if (!response.ok) {
@@ -70,10 +136,12 @@ export const api = {
    * Send a message and receive streaming updates.
    * @param {string} conversationId - The conversation ID
    * @param {string} content - The message content
+   * @param {string|null} mode - Operating mode key, or null for free chat
+   * @param {string|null} attachment - Optional text/markdown context
    * @param {function} onEvent - Callback function for each event: (eventType, data) => void
    * @returns {Promise<void>}
    */
-  async sendMessageStream(conversationId, content, onEvent) {
+  async sendMessageStream(conversationId, content, mode, attachment, onEvent) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message/stream`,
       {
@@ -81,7 +149,7 @@ export const api = {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, mode, attachment }),
       }
     );
 

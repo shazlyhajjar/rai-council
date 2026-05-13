@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
+import HistoryPage from './components/HistoryPage';
+import TopNav from './components/TopNav';
 import { api } from './api';
+import { DEFAULT_MODE_KEY } from './modes';
 import './App.css';
 
 function App() {
@@ -9,6 +12,8 @@ function App() {
   const [currentConversationId, setCurrentConversationId] = useState(null);
   const [currentConversation, setCurrentConversation] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [activeMode, setActiveMode] = useState(DEFAULT_MODE_KEY);
+  const [activeView, setActiveView] = useState('chat'); // 'chat' | 'history'
 
   // Load conversations on mount
   useEffect(() => {
@@ -57,13 +62,42 @@ function App() {
     setCurrentConversationId(id);
   };
 
-  const handleSendMessage = async (content) => {
+  const handleVerdictDecided = (updated) => {
+    setCurrentConversation((prev) => {
+      if (!prev) return prev;
+      const messages = prev.messages.map((msg) => {
+        if (msg.verdict_id === updated.id) {
+          return {
+            ...msg,
+            verdict: {
+              id: updated.id,
+              decision: updated.decision,
+              override_reasoning: updated.override_reasoning,
+              decided_at: updated.decided_at,
+              created_at: updated.created_at,
+            },
+          };
+        }
+        return msg;
+      });
+      return { ...prev, messages };
+    });
+  };
+
+  const handleSendMessage = async (content, attachment = null) => {
     if (!currentConversationId) return;
+
+    const modeForThisMessage = activeMode;
 
     setIsLoading(true);
     try {
-      // Optimistically add user message to UI
-      const userMessage = { role: 'user', content };
+      // Optimistically add user message to UI (with mode + attachment for display).
+      const userMessage = {
+        role: 'user',
+        content,
+        mode: modeForThisMessage,
+        ...(attachment ? { attachment } : {}),
+      };
       setCurrentConversation((prev) => ({
         ...prev,
         messages: [...prev.messages, userMessage],
@@ -75,7 +109,7 @@ function App() {
         stage1: null,
         stage2: null,
         stage3: null,
-        metadata: null,
+        metadata: { mode: modeForThisMessage },
         loading: {
           stage1: false,
           stage2: false,
@@ -90,8 +124,21 @@ function App() {
       }));
 
       // Send message with streaming
-      await api.sendMessageStream(currentConversationId, content, (eventType, event) => {
+      await api.sendMessageStream(currentConversationId, content, modeForThisMessage, attachment, (eventType, event) => {
         switch (eventType) {
+          case 'mode_start':
+            setCurrentConversation((prev) => {
+              const messages = [...prev.messages];
+              const lastMsg = messages[messages.length - 1];
+              lastMsg.metadata = {
+                ...(lastMsg.metadata || {}),
+                mode: event.mode,
+                flow: event.flow,
+              };
+              return { ...prev, messages };
+            });
+            break;
+
           case 'stage1_start':
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
@@ -106,6 +153,9 @@ function App() {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
               lastMsg.stage1 = event.data;
+              if (event.metadata) {
+                lastMsg.metadata = { ...(lastMsg.metadata || {}), ...event.metadata };
+              }
               lastMsg.loading.stage1 = false;
               return { ...prev, messages };
             });
@@ -125,7 +175,9 @@ function App() {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
               lastMsg.stage2 = event.data;
-              lastMsg.metadata = event.metadata;
+              if (event.metadata) {
+                lastMsg.metadata = { ...(lastMsg.metadata || {}), ...event.metadata };
+              }
               lastMsg.loading.stage2 = false;
               return { ...prev, messages };
             });
@@ -146,6 +198,16 @@ function App() {
               const lastMsg = messages[messages.length - 1];
               lastMsg.stage3 = event.data;
               lastMsg.loading.stage3 = false;
+              return { ...prev, messages };
+            });
+            break;
+
+          case 'verdict_created':
+            setCurrentConversation((prev) => {
+              const messages = [...prev.messages];
+              const lastMsg = messages[messages.length - 1];
+              lastMsg.verdict_id = event.verdict_id;
+              lastMsg.verdict = { id: event.verdict_id, decision: null };
               return { ...prev, messages };
             });
             break;
@@ -183,17 +245,29 @@ function App() {
 
   return (
     <div className="app">
-      <Sidebar
-        conversations={conversations}
-        currentConversationId={currentConversationId}
-        onSelectConversation={handleSelectConversation}
-        onNewConversation={handleNewConversation}
-      />
-      <ChatInterface
-        conversation={currentConversation}
-        onSendMessage={handleSendMessage}
-        isLoading={isLoading}
-      />
+      <TopNav activeView={activeView} onChangeView={setActiveView} />
+      <div className="app-body">
+        {activeView === 'chat' ? (
+          <>
+            <Sidebar
+              conversations={conversations}
+              currentConversationId={currentConversationId}
+              onSelectConversation={handleSelectConversation}
+              onNewConversation={handleNewConversation}
+            />
+            <ChatInterface
+              conversation={currentConversation}
+              onSendMessage={handleSendMessage}
+              isLoading={isLoading}
+              activeMode={activeMode}
+              onChangeMode={setActiveMode}
+              onVerdictDecided={handleVerdictDecided}
+            />
+          </>
+        ) : (
+          <HistoryPage />
+        )}
+      </div>
     </div>
   );
 }

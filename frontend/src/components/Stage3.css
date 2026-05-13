@@ -3,6 +3,24 @@
   border-color: #c8e6c8;
 }
 
+.stage3-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.stage3-header .stage-title {
+  margin: 0;
+}
+
+.stage3-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .final-response {
   background: #ffffff;
   padding: 20px;

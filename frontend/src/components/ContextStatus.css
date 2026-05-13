@@ -1,0 +1,76 @@
+.context-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  color: #4b5563;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.context-status:hover {
+  border-color: #4a90e2;
+  color: #4a90e2;
+  background: #f0f7ff;
+}
+
+.context-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #9ca3af;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.04);
+}
+
+.context-status.is-loaded {
+  border-color: #86efac;
+  background: #ecfdf5;
+  color: #15803d;
+}
+
+.context-status.is-loaded:hover {
+  border-color: #15803d;
+  background: #d1fae5;
+}
+
+.context-status.is-loaded .context-status-dot {
+  background: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.18);
+}
+
+.context-status.is-missing {
+  border-color: #fcd34d;
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.context-status.is-missing .context-status-dot {
+  background: #f59e0b;
+}
+
+.context-status.is-error {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.context-status.is-error .context-status-dot {
+  background: #dc2626;
+}
+
+.context-status.is-loading .context-status-dot {
+  animation: context-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes context-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}

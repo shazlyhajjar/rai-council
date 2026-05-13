@@ -1,0 +1,45 @@
+.top-nav {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 10px 24px;
+  background: #111827;
+  color: #f9fafb;
+  border-bottom: 1px solid #1f2937;
+}
+
+.top-nav-brand {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #f9fafb;
+}
+
+.top-nav-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.top-nav-tab {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #d1d5db;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.top-nav-tab:hover {
+  background: #1f2937;
+  color: #f9fafb;
+}
+
+.top-nav-tab.active {
+  background: #1f2937;
+  color: #f9fafb;
+  border-color: #4a90e2;
+}

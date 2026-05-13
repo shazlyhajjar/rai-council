@@ -1,0 +1,182 @@
+.chairman-decision {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #c8e6c8;
+  margin-top: 16px;
+}
+
+.chairman-decision.pending {
+  color: #6b7280;
+  font-style: italic;
+  font-size: 13px;
+}
+
+.chairman-decision-prompt {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.chairman-decision-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chairman-decision-button {
+  padding: 8px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.chairman-decision-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chairman-decision-button.accept {
+  background: #15803d;
+  border-color: #15803d;
+  color: #ffffff;
+}
+
+.chairman-decision-button.accept:hover:not(:disabled) {
+  background: #166534;
+  border-color: #166534;
+}
+
+.chairman-decision-button.override {
+  background: #ffffff;
+  border-color: #dc2626;
+  color: #b91c1c;
+}
+
+.chairman-decision-button.override:hover:not(:disabled) {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.chairman-decision-button.secondary {
+  background: #ffffff;
+  border-color: #d0d0d0;
+  color: #374151;
+}
+
+.chairman-decision-button.secondary:hover:not(:disabled) {
+  background: #f5f5f5;
+}
+
+.chairman-decision-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #111827;
+  outline: none;
+  box-sizing: border-box;
+  min-height: 72px;
+}
+
+.chairman-decision-textarea:focus {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+}
+
+.chairman-decision-error {
+  margin: 0;
+  padding: 8px 10px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+.chairman-decision-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  align-self: flex-start;
+}
+
+.chairman-decision.accepted {
+  border-color: #86efac;
+  background: #ecfdf5;
+}
+
+.chairman-decision.accepted .chairman-decision-badge {
+  background: #15803d;
+  color: #ffffff;
+}
+
+.chairman-decision.overridden {
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.chairman-decision.overridden .chairman-decision-badge {
+  background: #b91c1c;
+  color: #ffffff;
+}
+
+.chairman-decision-detail {
+  font-size: 13px;
+  color: #4b5563;
+}
+
+.chairman-decision-reasoning {
+  background: #ffffff;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.chairman-decision-reasoning .label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #b91c1c;
+}
+
+.chairman-decision-reasoning p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #1f2937;
+  white-space: pre-wrap;
+}
+
+.chairman-decision-link {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 12px;
+  color: #4b5563;
+  cursor: pointer;
+  text-decoration: underline;
+  align-self: flex-start;
+}
+
+.chairman-decision-link:hover {
+  color: #1f2937;
+}

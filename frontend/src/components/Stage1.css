@@ -59,7 +59,52 @@
   font-family: monospace;
 }
 
+.identity-tab {
+  align-items: flex-start;
+  text-align: left;
+  padding: 8px 14px;
+  min-width: 0;
+}
+
+.identity-tab.active {
+  border-bottom-color: #ffffff;
+}
+
+.tab-content > .model-identity {
+  margin-bottom: 14px;
+}
+
 .response-text {
   color: #333;
   line-height: 1.6;
+}
+
+.role-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-radius: 10px;
+  color: #ffffff;
+  background: #6366f1;
+  vertical-align: middle;
+}
+
+.role-badge.stance.stance-for {
+  background: #16a34a;
+}
+
+.role-badge.stance.stance-against {
+  background: #dc2626;
+}
+
+.role-badge.stance.stance-neutral {
+  background: #6b7280;
+}
+
+.role-badge-inline {
+  margin-left: 8px;
 }

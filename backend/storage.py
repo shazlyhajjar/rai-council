@@ -107,22 +107,23 @@ def list_conversations() -> List[Dict[str, Any]]:
     return conversations
 
 
-def add_user_message(conversation_id: str, content: str):
-    """
-    Add a user message to a conversation.
-
-    Args:
-        conversation_id: Conversation identifier
-        content: User message content
-    """
+def add_user_message(
+    conversation_id: str,
+    content: str,
+    mode: Optional[str] = None,
+    attachment: Optional[str] = None,
+):
+    """Add a user message with optional operating mode and attached context."""
     conversation = get_conversation(conversation_id)
     if conversation is None:
         raise ValueError(f"Conversation {conversation_id} not found")
 
-    conversation["messages"].append({
-        "role": "user",
-        "content": content
-    })
+    message: Dict[str, Any] = {"role": "user", "content": content}
+    if mode:
+        message["mode"] = mode
+    if attachment:
+        message["attachment"] = attachment
+    conversation["messages"].append(message)
 
     save_conversation(conversation)
 
@@ -131,27 +132,26 @@ def add_assistant_message(
     conversation_id: str,
     stage1: List[Dict[str, Any]],
     stage2: List[Dict[str, Any]],
-    stage3: Dict[str, Any]
+    stage3: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]] = None,
+    verdict_id: Optional[str] = None,
 ):
-    """
-    Add an assistant message with all 3 stages to a conversation.
-
-    Args:
-        conversation_id: Conversation identifier
-        stage1: List of individual model responses
-        stage2: List of model rankings
-        stage3: Final synthesized response
-    """
+    """Add an assistant message with all 3 stages + optional mode metadata + verdict id."""
     conversation = get_conversation(conversation_id)
     if conversation is None:
         raise ValueError(f"Conversation {conversation_id} not found")
 
-    conversation["messages"].append({
+    message: Dict[str, Any] = {
         "role": "assistant",
         "stage1": stage1,
         "stage2": stage2,
-        "stage3": stage3
-    })
+        "stage3": stage3,
+    }
+    if metadata:
+        message["metadata"] = metadata
+    if verdict_id:
+        message["verdict_id"] = verdict_id
+    conversation["messages"].append(message)
 
     save_conversation(conversation)
 

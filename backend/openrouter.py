@@ -44,7 +44,9 @@ async def query_model(
             message = data['choices'][0]['message']
 
             return {
-                'content': message.get('content'),
+                # Coerce None -> '' so downstream string ops (parse_ranking_from_text,
+                # de-anonymizer, markdown render) always get a string.
+                'content': message.get('content') or '',
                 'reasoning_details': message.get('reasoning_details')
             }
 
@@ -58,7 +60,7 @@ async def query_models_parallel(
     messages: List[Dict[str, str]]
 ) -> Dict[str, Optional[Dict[str, Any]]]:
     """
-    Query multiple models in parallel.
+    Query multiple models in parallel with the SAME message list.
 
     Args:
         models: List of OpenRouter model identifiers
@@ -76,4 +78,23 @@ async def query_models_parallel(
     responses = await asyncio.gather(*tasks)
 
     # Map models to their responses
+    return {model: response for model, response in zip(models, responses)}
+
+
+async def query_models_parallel_per_messages(
+    model_to_messages: Dict[str, List[Dict[str, str]]]
+) -> Dict[str, Optional[Dict[str, Any]]]:
+    """
+    Query multiple models in parallel, each with its OWN message list.
+
+    Used when each model needs a different system prompt, role, or stance
+    (Spec Review, Code Review, Architecture Debate). Order of the returned
+    dict matches insertion order of `model_to_messages`.
+    """
+    import asyncio
+
+    models = list(model_to_messages.keys())
+    tasks = [query_model(model, model_to_messages[model]) for model in models]
+
+    responses = await asyncio.gather(*tasks)
     return {model: response for model, response in zip(models, responses)}

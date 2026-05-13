@@ -1,0 +1,104 @@
+.copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.copy-button.icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 6px;
+  border-color: #e0e0e0;
+  background: #ffffff;
+  position: relative;
+}
+
+.copy-button.icon:hover {
+  background: #f0f7ff;
+  color: #4a90e2;
+  border-color: #4a90e2;
+}
+
+.copy-button.icon.copied {
+  background: #ecfdf5;
+  color: #15803d;
+  border-color: #86efac;
+}
+
+.copy-button.icon .copy-button-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: #1f2937;
+  color: #f9fafb;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.copy-button.icon:hover .copy-button-tooltip,
+.copy-button.icon.copied .copy-button-tooltip {
+  opacity: 1;
+}
+
+.copy-button.icon.copied .copy-button-tooltip {
+  background: #15803d;
+}
+
+.copy-button.labeled {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border-color: #4a90e2;
+  background: #ffffff;
+  color: #4a90e2;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.copy-button.labeled:hover {
+  background: #4a90e2;
+  color: #ffffff;
+}
+
+.copy-button.labeled.copied {
+  background: #15803d;
+  border-color: #15803d;
+  color: #ffffff;
+}
+
+.copy-button.labeled svg {
+  flex-shrink: 0;
+}
+
+/* Card-relative positioning helper — applied by parents */
+.with-copy-button {
+  position: relative;
+}
+
+.with-copy-button > .copy-button.icon {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+}
+
+/* Prevent the floating button from overlapping the model-name / chairman row */
+.with-copy-button > .model-name,
+.with-copy-button > .ranking-model,
+.with-copy-button > .chairman-label {
+  padding-right: 44px;
+}
