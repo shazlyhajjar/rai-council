@@ -1,0 +1,35 @@
+# Build artifacts / caches
+__pycache__/
+*.py[oc]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Frontend node_modules + dist (the Dockerfile builds dist fresh inside the
+# image; node_modules belongs only to dev).
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Secrets — never bake into the image. Coolify injects them at runtime.
+.env
+.env.local
+
+# Runtime data — persisted on a host volume, not in the image.
+data/
+
+# Local dev / editor / OS junk
+.git/
+.gitignore
+.github/
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# Docs / images that don't need to ship in the image
+header.jpg
+README.md
+DEPLOY.md
+CLAUDE.md

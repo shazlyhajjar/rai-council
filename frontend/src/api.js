@@ -1,8 +1,12 @@
 /**
  * API client for the LLM Council backend.
+ *
+ * Dev (vite serve) → talks to FastAPI on a separate port.
+ * Prod (vite build) → same-origin; FastAPI serves the bundled frontend AND
+ *   the API, so an empty base means "use the current origin".
  */
 
-const API_BASE = 'http://localhost:8001';
+const API_BASE = import.meta.env.PROD ? '' : 'http://localhost:8001';
 
 export const api = {
   /**

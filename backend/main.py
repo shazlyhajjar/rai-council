@@ -3,6 +3,8 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import uuid
@@ -133,9 +135,10 @@ class Conversation(BaseModel):
     messages: List[Dict[str, Any]]
 
 
-@app.get("/")
-async def root():
-    """Health check endpoint."""
+@app.get("/api/health")
+async def health():
+    """Health check endpoint. Lives under /api so the prod static mount can
+    own '/' (and serve the SPA's index.html)."""
     return {"status": "ok", "service": "LLM Council API"}
 
 
@@ -452,6 +455,23 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
         }
+    )
+
+
+# ── Static frontend (prod) ────────────────────────────────────────────────────
+# In production (Docker image) the frontend is built into ../frontend/dist and
+# served by FastAPI alongside the API on the same origin. In dev the directory
+# doesn't exist and we leave the mount off — vite serves the frontend itself
+# on its own port.
+#
+# IMPORTANT: this mount must come AFTER every `@app.<verb>("/api/...")` route
+# above, otherwise the StaticFiles catch-all would swallow API requests.
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _FRONTEND_DIST.is_dir():
+    app.mount(
+        "/",
+        StaticFiles(directory=str(_FRONTEND_DIST), html=True),
+        name="frontend",
     )
 
 
