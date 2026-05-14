@@ -26,6 +26,7 @@ from .council import (
 from .modes import get_mode, list_modes_for_ui
 from . import context as council_context
 from . import verdicts as verdicts_db
+from . import balance as balance_svc
 
 
 def _hydrate_verdicts(conversation: Dict[str, Any]) -> Dict[str, Any]:
@@ -142,6 +143,22 @@ async def root():
 async def get_modes():
     """List available operating modes for the chat UI dropdown."""
     return {"modes": list_modes_for_ui()}
+
+
+@app.get("/api/balance/openrouter")
+async def get_openrouter_balance():
+    """Live OpenRouter credit balance + month-to-date usage. 60s cache."""
+    return await balance_svc.fetch_openrouter_balance()
+
+
+@app.get("/api/balance/openai")
+async def get_openai_balance():
+    """OpenAI month-to-date spend (no balance endpoint exists provider-side).
+
+    Returns `spent_this_month`, optional `monthly_cap`, and (when cap is set)
+    `remaining`. 60s cache.
+    """
+    return await balance_svc.fetch_openai_spend()
 
 
 class UpdateContextRequest(BaseModel):

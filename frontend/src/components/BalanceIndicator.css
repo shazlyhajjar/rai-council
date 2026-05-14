@@ -1,0 +1,80 @@
+.balance-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.balance-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 999px;
+  color: #d1d5db;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.balance-pill:hover {
+  background: #374151;
+  border-color: #4b5563;
+}
+
+.balance-pill.is-error {
+  color: #fca5a5;
+  border-color: #7f1d1d;
+}
+
+.balance-label {
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: #9ca3af;
+}
+
+.balance-primary {
+  font-weight: 700;
+  color: #f9fafb;
+  font-variant-numeric: tabular-nums;
+}
+
+.balance-pill.is-error .balance-primary {
+  color: #fca5a5;
+}
+
+.balance-secondary {
+  color: #9ca3af;
+  font-variant-numeric: tabular-nums;
+}
+
+.balance-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.balance-dot.dot-green {
+  background: #22c55e;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.5);
+}
+
+.balance-dot.dot-amber {
+  background: #f59e0b;
+  box-shadow: 0 0 4px rgba(245, 158, 11, 0.5);
+}
+
+.balance-dot.dot-red {
+  background: #ef4444;
+  box-shadow: 0 0 4px rgba(239, 68, 68, 0.5);
+}
+
+.balance-dot.dot-unknown {
+  background: #6b7280;
+}

@@ -6,6 +6,25 @@ const API_BASE = 'http://localhost:8001';
 
 export const api = {
   /**
+   * Fetch OpenRouter credit balance + month-to-date usage. Cached 60s server-side.
+   */
+  async getOpenRouterBalance() {
+    const response = await fetch(`${API_BASE}/api/balance/openrouter`);
+    if (!response.ok) throw new Error('Failed to load OpenRouter balance');
+    return response.json();
+  },
+
+  /**
+   * Fetch OpenAI month-to-date spend (no balance endpoint exists at OpenAI;
+   * remaining is computed against OPENAI_MONTHLY_CAP if set).
+   */
+  async getOpenAIBalance() {
+    const response = await fetch(`${API_BASE}/api/balance/openai`);
+    if (!response.ok) throw new Error('Failed to load OpenAI balance');
+    return response.json();
+  },
+
+  /**
    * Fetch the RAI Council Brief content + metadata.
    * Returns { loaded, path, chars, words, lines, updated_at, content }.
    */

@@ -8,6 +8,19 @@ load_dotenv()
 # OpenRouter API key
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
+# OpenAI admin API key (scope: api.usage.read). Powers the OpenAI balance pill
+# in the header. Different from any chat-side OPENAI_API_KEY — admin keys are
+# org-scoped and only used for the /v1/organization/costs endpoint.
+OPENAI_ADMIN_API_KEY = os.getenv("OPENAI_ADMIN_API_KEY")
+
+# Optional monthly USD cap for the OpenAI pill. If set, the pill renders a
+# "remaining" percentage. If unset, the pill shows month-to-date spend only.
+_raw_cap = os.getenv("OPENAI_MONTHLY_CAP")
+try:
+    OPENAI_MONTHLY_CAP = float(_raw_cap) if _raw_cap not in (None, "") else None
+except ValueError:
+    OPENAI_MONTHLY_CAP = None
+
 # Council members — 6 models split across two teams.
 # Order matters: strategists first, then builders. The UI renders tabs in this
 # order, so keeping each tier contiguous makes the visual grouping cleaner.

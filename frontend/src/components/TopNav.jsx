@@ -1,3 +1,4 @@
+import BalanceIndicator from './BalanceIndicator';
 import './TopNav.css';
 
 const VIEWS = [
@@ -21,6 +22,7 @@ export default function TopNav({ activeView, onChangeView }) {
           </button>
         ))}
       </div>
+      <BalanceIndicator />
     </nav>
   );
 }
