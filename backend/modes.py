@@ -40,6 +40,126 @@ CODE_REVIEW_SYSTEM_PROMPT = (
     "exact lines or patterns."
 )
 
+SPEC_VERIFY_SYSTEM_PROMPT = (
+    "You are performing a systematic verification pass on a product "
+    "specification. You do not write essays. You work a fixed checklist and "
+    "report findings with exact counts. Precision over prose. Never pad, "
+    "never editorialize, never summarize at the end."
+)
+
+# The six cross-reference axes. (name, what to check). The N/A escape hatch is
+# baked into the rendered prompt so a spec that lacks a structural element
+# doesn't force fabricated zero-count reports.
+SPEC_VERIFY_XREF_AXES = [
+    (
+        "BEHAVIORS → DATA CONTRACTS",
+        "For every numbered behavior, verify it references fields that actually "
+        "exist in the data contracts section. Flag any behavior that references "
+        "a field name, type, or endpoint not defined in the contracts.",
+    ),
+    (
+        "STATES → TRANSITIONS",
+        "For every defined state, verify there is at least one defined "
+        "transition INTO that state and at least one transition OUT. Flag "
+        "orphan states (no entry) and terminal states (no exit) that aren't "
+        "explicitly marked as terminal.",
+    ),
+    (
+        "API ENDPOINTS → CONSUMERS",
+        "For every field in every API response schema, verify at least one "
+        "behavior or rendering rule consumes it (flag dead fields). For every "
+        "field a behavior reads, verify the API actually provides it.",
+    ),
+    (
+        "VISUAL SPECS → DATA SOURCES",
+        "For every visual element that displays dynamic data, verify the data "
+        "source is defined in the contracts. Flag any visual that references "
+        "data with no specified origin.",
+    ),
+    (
+        "CROSS-REFERENCES",
+        "For every “see §X” or “per §X” reference, verify the "
+        "referenced section actually says what the referencing section claims "
+        "it says. Flag mismatches.",
+    ),
+    (
+        "TRAPS → BEHAVIORS",
+        "For every trap/constraint, verify at least one behavior enforces it. "
+        "Flag unenforceable traps.",
+    ),
+]
+
+# Fix Verification statuses (adjustment #3 — AMBIGUOUS added so a model isn't
+# forced to miscategorize a vague finding or judgment-dependent fix).
+SPEC_VERIFY_FIX_STATUSES = [
+    "RESOLVED",
+    "PARTIALLY RESOLVED",
+    "NOT RESOLVED",
+    "NEW ISSUE CREATED",
+    "AMBIGUOUS",
+]
+
+
+def build_spec_verify_xref_prompt() -> str:
+    """The structured cross-reference checklist every model receives."""
+    axes_block = "\n\n".join(
+        f"{i + 1}. {name}\n   {check}"
+        for i, (name, check) in enumerate(SPEC_VERIFY_XREF_AXES)
+    )
+    return (
+        f"Verify the specification by working through these "
+        f"{len(SPEC_VERIFY_XREF_AXES)} cross-reference axes IN ORDER. For each "
+        f"axis you systematically cross-reference one section against another "
+        f"— you do not skim for whatever jumps out.\n\n"
+        f"{axes_block}\n\n"
+        f"OUTPUT FORMAT — for EACH axis, in order, output exactly:\n\n"
+        f"[AXIS NAME]: <N> items checked, <M> issues found\n"
+        f"- <specific issue: name the exact behavior/field/state/section>\n"
+        f"- <next issue>\n\n"
+        f"Rules:\n"
+        f"- If an axis has zero issues, still report the count: "
+        f"“[AXIS NAME]: 14 items checked, 0 issues found”.\n"
+        f"- If the spec does not contain the structural element an axis "
+        f"targets (e.g. no numbered behaviors, no state machine, no API "
+        f"schemas), report exactly: “[AXIS NAME]: N/A — this spec has no "
+        f"<element>” and move on. Do NOT fabricate checks to fill the axis.\n"
+        f"- No introduction, no conclusion, no prose outside the per-axis "
+        f"format. Start directly with axis 1."
+    )
+
+
+def build_spec_verify_fix_prompt(previous_findings: str) -> str:
+    """The fix-verification checklist. `previous_findings` is pasted by the user."""
+    statuses = " | ".join(SPEC_VERIFY_FIX_STATUSES)
+    findings = (previous_findings or "").strip() or "(no previous findings were provided)"
+    return (
+        f"You are verifying that fixes were correctly applied. You are given "
+        f"(1) the UPDATED spec [in the message below] and (2) the list of "
+        f"PREVIOUS FINDINGS here:\n\n"
+        f"--- PREVIOUS FINDINGS ---\n{findings}\n--- END PREVIOUS FINDINGS ---\n\n"
+        f"For EACH finding, verify three things against the updated spec:\n"
+        f"(a) the fix is correctly applied\n"
+        f"(b) the fix does not contradict anything in adjacent sections\n"
+        f"(c) the fix did not create new gaps\n\n"
+        f"OUTPUT FORMAT — one block per finding, in the order the findings "
+        f"were listed:\n\n"
+        f"FINDING <n>: <one-line restatement of the original finding>\n"
+        f"STATUS: <{statuses}>\n"
+        f"DETAIL: <REQUIRED unless STATUS is RESOLVED — explain what is still "
+        f"wrong, what new issue the fix created, or precisely why it is "
+        f"ambiguous to verify>\n\n"
+        f"Rules:\n"
+        f"- AMBIGUOUS means the original finding was too vague to verify, or "
+        f"the fix is judgment-dependent and you cannot say objectively whether "
+        f"it resolves the finding. Use it instead of guessing.\n"
+        f"- Do NOT re-review sections that were not part of the original "
+        f"findings. This is not a fresh review.\n"
+        f"- Do NOT invent findings that were not in the list. The only "
+        f"exception: if a fix to a listed finding directly created a new "
+        f"problem, record it under that finding as NEW ISSUE CREATED.\n"
+        f"- No essay. No summary. Start directly with FINDING 1."
+    )
+
 
 # Per-mode role prompts, keyed by full OpenRouter model id. Each tier has 3
 # slots; strategists set the lens, builders set the implementation reality.
@@ -204,6 +324,22 @@ MODES: Dict[str, Dict] = {
                 ),
             },
         },
+    },
+    "spec_verify": {
+        "label": "Spec Verify",
+        "description": (
+            "Systematic verification. Cross-Reference Review walks 6 fixed "
+            "axes and reports counts + issues by axis (no essays). Fix "
+            "Verification checks a prior findings list against the updated "
+            "spec and returns a per-finding scorecard."
+        ),
+        "system_prompt": SPEC_VERIFY_SYSTEM_PROMPT,
+        "flow": "spec_verify",
+        # No `roles` key on purpose — every model runs the SAME structured
+        # checklist with an empty role prompt (no "be the Architect" nudge
+        # layered on top of "check axis 3").
+        "sub_modes": ["cross_reference", "fix_verification"],
+        "default_sub_mode": "cross_reference",
     },
 }
 

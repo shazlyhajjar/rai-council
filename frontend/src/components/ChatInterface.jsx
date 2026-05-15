@@ -16,11 +16,17 @@ export default function ChatInterface({
   onChangeMode,
   deepCheck,
   onChangeDeepCheck,
+  subMode,
+  onChangeSubMode,
   onVerdictDecided,
 }) {
   const [input, setInput] = useState('');
   const [attachment, setAttachment] = useState('');
+  const [previousFindings, setPreviousFindings] = useState('');
   const messagesEndRef = useRef(null);
+
+  const isSpecVerify = activeMode === 'spec_verify';
+  const isFixVerification = isSpecVerify && subMode === 'fix_verification';
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -33,7 +39,11 @@ export default function ChatInterface({
   const handleSubmit = (e) => {
     e.preventDefault();
     if (input.trim() && !isLoading) {
-      onSendMessage(input, attachment.trim() ? attachment : null);
+      onSendMessage(
+        input,
+        attachment.trim() ? attachment : null,
+        isFixVerification && previousFindings.trim() ? previousFindings : null,
+      );
       setInput('');
     }
   };
@@ -73,6 +83,21 @@ export default function ChatInterface({
         ))}
       </select>
       <div className="mode-bar-description">{activeModeDef.description}</div>
+      {isSpecVerify && activeModeDef.subModes && (
+        <div className="submode-toggle" role="group" aria-label="Spec Verify sub-mode">
+          {activeModeDef.subModes.map((sm) => (
+            <button
+              key={sm.key}
+              type="button"
+              className={`submode-button ${subMode === sm.key ? 'is-active' : ''}`}
+              onClick={() => onChangeSubMode?.(sm.key)}
+              disabled={isLoading}
+            >
+              {sm.label}
+            </button>
+          ))}
+        </div>
+      )}
       <label
         className={`challenge-toggle ${deepCheck ? 'is-on' : ''}`}
         title="When ON, every model output at every stage is fed back to itself with a stage-aware challenge prompt before moving on. Roughly 2× latency and 2× API spend, but pushes past first-pass surface-level answers."
@@ -92,11 +117,32 @@ export default function ChatInterface({
     </div>
   );
 
+  const previousFindingsPanel = isFixVerification ? (
+    <div className="previous-findings-panel">
+      <div className="previous-findings-header">
+        <span className="previous-findings-label">Previous Findings</span>
+        <span className="previous-findings-hint">
+          Paste the prior verdict / findings list. Each model verifies these
+          against the updated spec — it does not re-review the whole spec.
+        </span>
+      </div>
+      <textarea
+        className="previous-findings-textarea"
+        placeholder="Paste the consolidated issue list from the previous Cross-Reference Review pass…"
+        value={previousFindings}
+        onChange={(e) => setPreviousFindings(e.target.value)}
+        disabled={isLoading}
+        rows={6}
+      />
+    </div>
+  ) : null;
+
   if (!conversation) {
     return (
       <div className="chat-interface">
         {modeBar}
         <AttachmentPanel value={attachment} onChange={setAttachment} disabled={isLoading} />
+        {previousFindingsPanel}
         <div className="empty-state">
           <h2>Welcome to LLM Council</h2>
           <p>Create a new conversation to get started</p>
@@ -109,6 +155,7 @@ export default function ChatInterface({
     <div className="chat-interface">
       {modeBar}
       <AttachmentPanel value={attachment} onChange={setAttachment} disabled={isLoading} />
+      {previousFindingsPanel}
       <div className="messages-container">
         {conversation.messages.length === 0 ? (
           <div className="empty-state">

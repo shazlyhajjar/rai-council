@@ -138,8 +138,9 @@ export const api = {
    * @param {string|null} mode - Operating mode key, or null for free chat
    * @param {string|null} attachment - Optional text/markdown context
    * @param {boolean} deepCheck - Run Challenge Mode self-critique at every stage
+   * @param {object} extras - { subMode, previousFindings } — spec_verify only
    */
-  async sendMessage(conversationId, content, mode = null, attachment = null, deepCheck = true) {
+  async sendMessage(conversationId, content, mode = null, attachment = null, deepCheck = true, extras = {}) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message`,
       {
@@ -147,7 +148,14 @@ export const api = {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ content, mode, attachment, deep_check: deepCheck }),
+        body: JSON.stringify({
+          content,
+          mode,
+          attachment,
+          deep_check: deepCheck,
+          sub_mode: extras.subMode ?? null,
+          previous_findings: extras.previousFindings ?? null,
+        }),
       }
     );
     if (!response.ok) {
@@ -164,9 +172,10 @@ export const api = {
    * @param {string|null} attachment - Optional text/markdown context
    * @param {boolean} deepCheck - Run Challenge Mode self-critique at every stage
    * @param {function} onEvent - Callback function for each event: (eventType, data) => void
+   * @param {object} extras - { subMode, previousFindings } — spec_verify only
    * @returns {Promise<void>}
    */
-  async sendMessageStream(conversationId, content, mode, attachment, deepCheck, onEvent) {
+  async sendMessageStream(conversationId, content, mode, attachment, deepCheck, onEvent, extras = {}) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message/stream`,
       {
@@ -174,7 +183,14 @@ export const api = {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ content, mode, attachment, deep_check: deepCheck }),
+        body: JSON.stringify({
+          content,
+          mode,
+          attachment,
+          deep_check: deepCheck,
+          sub_mode: extras.subMode ?? null,
+          previous_findings: extras.previousFindings ?? null,
+        }),
       }
     );
 

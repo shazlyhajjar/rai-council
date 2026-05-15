@@ -34,7 +34,21 @@ export const MODES = [
     description:
       'Production code review. Strategists pick at correctness and design (Security & Patterns / Performance & Scale / Edge Cases). Builders flag what would block extending or testing (Extensibility / Test Seams / Async & Deps).',
   },
+  {
+    key: 'spec_verify',
+    label: 'Spec Verify',
+    short: 'Spec Verify',
+    description:
+      'Systematic verification. Cross-Reference Review walks 6 fixed axes and reports counts + issues by axis (no essays). Fix Verification checks a prior findings list against the updated spec and returns a per-finding scorecard.',
+    subModes: [
+      { key: 'cross_reference', label: 'Cross-Reference Review' },
+      { key: 'fix_verification', label: 'Fix Verification' },
+    ],
+    defaultSubMode: 'cross_reference',
+  },
 ];
+
+export const DEFAULT_SUB_MODE = 'cross_reference';
 
 export const DEFAULT_MODE_KEY = null;
 

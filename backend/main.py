@@ -24,6 +24,8 @@ from .council import (
     calculate_aggregate_rankings,
     debate_round1,
     debate_round2,
+    spec_verify_stage1,
+    spec_verify_chairman,
 )
 from .modes import get_mode, list_modes_for_ui
 from . import context as council_context
@@ -103,6 +105,10 @@ class SendMessageRequest(BaseModel):
     # stage-aware self-challenge pass before feeding forward. Default on per
     # spec; the frontend exposes a toggle. False reproduces the v1 pipeline.
     deep_check: bool = True
+    # spec_verify only. sub_mode ∈ {"cross_reference","fix_verification"}.
+    # previous_findings carries the prior verdict text for fix_verification.
+    sub_mode: Optional[str] = None
+    previous_findings: Optional[str] = None
 
 
 def compose_council_input(content: str, attachment: Optional[str]) -> str:
@@ -276,6 +282,8 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         council_input,
         mode_key=request.mode,
         deep_check=request.deep_check,
+        sub_mode=request.sub_mode,
+        previous_findings=request.previous_findings,
     )
 
     # Log the verdict (only if we actually got a chairman synthesis).
@@ -351,7 +359,31 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             if is_first_message:
                 title_task = asyncio.create_task(generate_conversation_title(request.content))
 
-            if flow == "debate":
+            if flow == "spec_verify":
+                sub = request.sub_mode or (mode_def or {}).get("default_sub_mode", "cross_reference")
+
+                yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
+                stage1_results = await spec_verify_stage1(
+                    council_input, mode_def, sub, request.previous_findings, deep_check=deep_check
+                )
+                yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
+
+                # spec_verify has NO Stage 2 cross-review (adjustment #2).
+                # The frontend renders nothing for an absent/empty Stage 2.
+                yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
+                stage3_result = await spec_verify_chairman(
+                    council_input, stage1_results, sub, deep_check=deep_check
+                )
+                yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
+
+                stage2_results = []
+                final_metadata = {
+                    "mode": mode_key,
+                    "flow": flow,
+                    "sub_mode": sub,
+                    "deep_check": deep_check,
+                }
+            elif flow == "debate":
                 yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
                 round1, stance_map = await debate_round1(council_input, mode_def, deep_check=deep_check)
                 yield f"data: {json.dumps({'type': 'stage1_complete', 'data': round1, 'metadata': {'stance_map': stance_map}})}\n\n"

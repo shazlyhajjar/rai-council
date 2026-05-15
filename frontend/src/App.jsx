@@ -4,7 +4,7 @@ import ChatInterface from './components/ChatInterface';
 import HistoryPage from './components/HistoryPage';
 import TopNav from './components/TopNav';
 import { api } from './api';
-import { DEFAULT_MODE_KEY } from './modes';
+import { DEFAULT_MODE_KEY, DEFAULT_SUB_MODE } from './modes';
 import './App.css';
 
 const DEEP_CHECK_KEY = 'rai-council:deep-check';
@@ -27,6 +27,8 @@ function App() {
   const [activeMode, setActiveMode] = useState(DEFAULT_MODE_KEY);
   const [activeView, setActiveView] = useState('chat'); // 'chat' | 'history'
   const [deepCheck, setDeepCheck] = useState(readDeepCheckPref);
+  // spec_verify sub-mode. Session-level (mirrors activeMode — not persisted).
+  const [subMode, setSubMode] = useState(DEFAULT_SUB_MODE);
 
   // Persist Challenge Mode preference across sessions.
   useEffect(() => {
@@ -106,11 +108,16 @@ function App() {
     });
   };
 
-  const handleSendMessage = async (content, attachment = null) => {
+  const handleSendMessage = async (content, attachment = null, previousFindings = null) => {
     if (!currentConversationId) return;
 
     const modeForThisMessage = activeMode;
     const deepCheckForThisMessage = deepCheck;
+    const subModeForThisMessage = modeForThisMessage === 'spec_verify' ? subMode : null;
+    const previousFindingsForThisMessage =
+      modeForThisMessage === 'spec_verify' && subMode === 'fix_verification'
+        ? previousFindings
+        : null;
 
     setIsLoading(true);
     try {
@@ -254,6 +261,9 @@ function App() {
           default:
             console.log('Unknown event type:', eventType);
         }
+      }, {
+        subMode: subModeForThisMessage,
+        previousFindings: previousFindingsForThisMessage,
       });
     } catch (error) {
       console.error('Failed to send message:', error);
@@ -286,6 +296,8 @@ function App() {
               onChangeMode={setActiveMode}
               deepCheck={deepCheck}
               onChangeDeepCheck={setDeepCheck}
+              subMode={subMode}
+              onChangeSubMode={setSubMode}
               onVerdictDecided={handleVerdictDecided}
             />
           </>

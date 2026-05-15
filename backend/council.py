@@ -27,6 +27,8 @@ from .modes import (
     assign_role,
     assign_stances,
     STANCE_PROMPTS,
+    build_spec_verify_xref_prompt,
+    build_spec_verify_fix_prompt,
 )
 from .challenge import challenge_response
 
@@ -740,6 +742,128 @@ Then give a clear recommendation — not "it depends," but the decision you woul
     return result
 
 
+# ─── spec_verify flow ──────────────────────────────────────────────────────
+# A 4th mode with two sub-modes. Unlike roles/debate it has NO Stage 2 cross-
+# review (adjustment #2 — structured axis reports don't benefit from peer
+# ranking; the chairman aggregates directly). Every model runs the SAME
+# structured checklist with an empty role prompt.
+
+async def spec_verify_stage1(
+    user_query: str,
+    mode_def: Dict,
+    sub_mode: str,
+    previous_findings: Optional[str] = None,
+    deep_check: bool = False,
+) -> List[Dict[str, Any]]:
+    """Stage 1 for spec_verify: every model gets the identical structured
+    checklist (cross-reference axes, or fix-verification per the sub-mode).
+    No per-model role prompt."""
+    if sub_mode == "fix_verification":
+        task_prompt = build_spec_verify_fix_prompt(previous_findings or "")
+    else:
+        task_prompt = build_spec_verify_xref_prompt()
+
+    task_system = "\n\n".join([mode_def["system_prompt"], task_prompt])
+    shared_messages = [
+        {"role": "system", "content": _compose_system(task_system)},
+        {"role": "user", "content": user_query},
+    ]
+    per_model_messages = {model: shared_messages for model in COUNCIL_MODELS}
+    responses = await query_models_parallel_per_messages(per_model_messages)
+
+    results: List[Dict[str, Any]] = []
+    for model, response in responses.items():
+        if response is None:
+            continue
+        results.append(
+            {
+                "model": model,
+                "response": response.get("content", ""),
+                "tier": tier_for(model),
+            }
+        )
+
+    if deep_check and results:
+        results = await _challenge_batch(
+            results,
+            per_model_messages,
+            stage="stage1",
+            content_key="response",
+            original_key="original_response",
+        )
+    return results
+
+
+async def spec_verify_chairman(
+    user_query: str,
+    stage1_results: List[Dict[str, Any]],
+    sub_mode: str,
+    deep_check: bool = False,
+) -> Dict[str, Any]:
+    """Sub-mode-aware chairman. Cross-Reference Review → aggregate by axis,
+    merge duplicates, flag disagreement. Fix Verification → scorecard."""
+    reports = "\n\n".join(
+        f"═══ {r['model']} ═══\n{r['response']}" for r in stage1_results
+    )
+
+    if sub_mode == "fix_verification":
+        chairman_prompt = f"""You are the Chairman aggregating {len(stage1_results)} fix-verification reports.
+
+Context (the updated spec + prior findings the reviewers worked from):
+{user_query}
+
+REVIEWER REPORTS:
+{reports}
+
+Produce a SCORECARD first, exactly:
+
+SCORECARD
+- RESOLVED: <count>
+- PARTIALLY RESOLVED: <count>
+- NOT RESOLVED: <count>
+- NEW ISSUE CREATED: <count>
+- AMBIGUOUS: <count>
+
+Count each distinct finding once, using the majority status across reviewers; if reviewers split evenly, take the worse status (NOT RESOLVED > PARTIALLY RESOLVED > RESOLVED; AMBIGUOUS and NEW ISSUE CREATED always surface).
+
+Then, ONLY for findings whose consolidated status is NOT "RESOLVED", output one line each:
+
+FINDING <n> — <STATUS>: <one-line consolidated judgment; note where reviewers disagreed, e.g. "(4/6 NOT RESOLVED, 2/6 PARTIALLY)">
+
+Do NOT list RESOLVED findings individually. No essay, no preamble, no closing remarks."""
+    else:
+        chairman_prompt = f"""You are the Chairman aggregating {len(stage1_results)} cross-reference verification reports. Each reviewer worked the SAME 6 axes.
+
+Spec context the reviewers verified:
+{user_query}
+
+REVIEWER REPORTS (each organized by axis):
+{reports}
+
+Aggregate BY AXIS. For each of the 6 axes, in order, output:
+
+[AXIS NAME]: <total distinct issues after merging duplicates across reviewers>
+- <consolidated issue> (flagged by <k>/<n> reviewers)
+- <next consolidated issue> …
+DISAGREEMENT: <only if reviewers conflict on the same cross-reference — name it: "Reviewer X flags behavior 4 → field `foo`; Reviewers Y,Z say `foo` is defined in §3">
+
+If every reviewer reported an axis as N/A, output: "[AXIS NAME]: N/A (no reviewer found the relevant structure)".
+
+After all 6 axes, output a single CONSOLIDATED ISSUE LIST: every distinct issue across all axes, de-duplicated, ordered by severity (missing/contradicted data contracts and broken cross-references first; orphan/terminal states next; dead fields and cosmetic last). Each line: "<severity> — <axis> — <issue> (flagged by k/n)".
+
+No essay, no preamble, no closing remarks."""
+
+    messages = _system_message() + [{"role": "user", "content": chairman_prompt}]
+    response = await query_model(CHAIRMAN_MODEL, messages)
+    if response is None:
+        return {"model": CHAIRMAN_MODEL, "response": "Error: Unable to generate synthesis."}
+
+    result = {"model": CHAIRMAN_MODEL, "response": response.get("content", "")}
+    if deep_check:
+        result = await _challenge_stage3(result, messages)
+    return result
+
+
 def parse_ranking_from_text(ranking_text: str) -> List[str]:
     """Parse the FINAL RANKING section from the model's response."""
     import re
@@ -829,6 +953,8 @@ async def run_full_council(
     user_query: str,
     mode_key: Optional[str] = None,
     deep_check: bool = False,
+    sub_mode: Optional[str] = None,
+    previous_findings: Optional[str] = None,
 ) -> Tuple[List, List, Dict, Dict]:
     """Run the complete 3-stage council process, mode-aware.
 
@@ -838,11 +964,35 @@ async def run_full_council(
     Debate mode: stage1 = round 1 (tier-balanced stances), stage2 = round 2
     rebuttals (NOT a ranking), stage3 = chairman verdict.
 
+    spec_verify mode: stage1 = identical structured checklist per model, NO
+    stage2 cross-review, stage3 = sub-mode-aware chairman aggregation.
+
     When `deep_check` is True, every model at every stage gets a stage-aware
     self-challenge pass. Only the post-challenge text feeds into the next
     stage. See backend/challenge.py for the prompts.
     """
     mode_def = get_mode(mode_key)
+
+    # --- spec_verify branch (no Stage 2 cross-review) ---
+    if mode_def and mode_def.get("flow") == "spec_verify":
+        sub = sub_mode or mode_def.get("default_sub_mode", "cross_reference")
+        stage1_results = await spec_verify_stage1(
+            user_query, mode_def, sub, previous_findings, deep_check=deep_check
+        )
+        base_meta = {
+            "mode": mode_key,
+            "flow": "spec_verify",
+            "sub_mode": sub,
+            "deep_check": deep_check,
+        }
+        if not stage1_results:
+            return [], [], {"model": "error", "response": "All models failed to respond. Please try again."}, base_meta
+        stage3_result = await spec_verify_chairman(
+            user_query, stage1_results, sub, deep_check=deep_check
+        )
+        # Stage 2 is intentionally empty — the frontend Stage2 component
+        # renders nothing for an empty list.
+        return stage1_results, [], stage3_result, base_meta
 
     # --- Architecture Debate branch ---
     if mode_def and mode_def.get("flow") == "debate":
