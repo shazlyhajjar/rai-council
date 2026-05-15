@@ -4,8 +4,16 @@ Stage 1 — every council member responds (role-aware in roles modes).
 Stage 2 — cross-team peer review: strategists rank builders, builders rank
           strategists. One ranking call per reviewer, 6 calls total.
 Stage 3 — chairman synthesizes with explicit strategist/builder grouping.
+
+Challenge Mode ("Path A"): when `deep_check=True`, every model output at
+every stage gets a second pass — the same model receives its own response
+back with a stage-aware challenge prompt and produces a revised, complete
+version. Only the revised version feeds forward. A failed challenge call
+silently falls back to the original (logged via openrouter.py's stderr
+diagnostics) so a flaky API call can't take down a whole stage.
 """
 
+import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 from .openrouter import (
     query_models_parallel,
@@ -20,6 +28,7 @@ from .modes import (
     assign_stances,
     STANCE_PROMPTS,
 )
+from .challenge import challenge_response
 
 
 def _compose_system(task_system: Optional[str] = None) -> str:
@@ -99,15 +108,64 @@ def _build_debate_round2_messages(
     ]
 
 
+async def _challenge_batch(
+    results: List[Dict[str, Any]],
+    per_model_messages: Dict[str, List[Dict[str, str]]],
+    *,
+    stage: str,
+    content_key: str,
+    original_key: str,
+    extra: Optional[callable] = None,
+) -> List[Dict[str, Any]]:
+    """Run per-model self-challenges in parallel, merge back into the result list.
+
+    Each successful challenge produces a new entry where `content_key` holds
+    the revised text, `original_key` preserves the initial text, and a
+    `challenged: True` flag is set. A failed/empty challenge leaves the
+    original entry intact with `challenged: False`.
+
+    `extra` is an optional post-processor called with the new entry — used
+    by stage 2 to re-parse the ranking after the revised text lands.
+    """
+
+    async def run_one(entry: Dict[str, Any]) -> Dict[str, Any]:
+        msgs = per_model_messages.get(entry["model"])
+        if not msgs:
+            return {**entry, "challenged": False}
+        revised = await challenge_response(
+            model=entry["model"],
+            original_messages=msgs,
+            initial_response=entry.get(content_key, "") or "",
+            stage=stage,
+        )
+        if revised is None:
+            return {**entry, "challenged": False}
+        new_entry = {
+            **entry,
+            original_key: entry.get(content_key, ""),
+            content_key: revised,
+            "challenged": True,
+        }
+        if extra is not None:
+            extra(new_entry)
+        return new_entry
+
+    return list(await asyncio.gather(*[run_one(r) for r in results]))
+
+
 async def stage1_collect_responses(
     user_query: str,
     mode_def: Optional[Dict] = None,
+    deep_check: bool = False,
 ) -> List[Dict[str, Any]]:
     """Stage 1: collect responses, mode-aware.
 
     - Free chat (mode_def is None): plain user query, no system prompt.
     - Roles mode: each model gets a unique role prompt.
     - Debate mode: this function is NOT used — see `debate_round1` below.
+
+    If `deep_check` is True, each model's response is fed back to itself with
+    a stage-1 challenge prompt before being returned.
     """
     if mode_def and mode_def.get("flow") == "roles":
         per_model_messages = {
@@ -129,13 +187,21 @@ async def stage1_collect_responses(
                     "tier": tier_for(model),
                 }
             )
+        if deep_check and results:
+            results = await _challenge_batch(
+                results,
+                per_model_messages,
+                stage="stage1",
+                content_key="response",
+                original_key="original_response",
+            )
         return results
 
     # Free chat path — original behavior, but the auto-loaded RAI brief is
     # still injected as a system message so every model sees project context.
     messages = _system_message() + [{"role": "user", "content": user_query}]
     responses = await query_models_parallel(COUNCIL_MODELS, messages)
-    return [
+    results = [
         {
             "model": model,
             "response": response.get("content", ""),
@@ -144,16 +210,31 @@ async def stage1_collect_responses(
         for model, response in responses.items()
         if response is not None
     ]
+    if deep_check and results:
+        # All models used the same messages — re-key for the challenge helper.
+        per_model_messages = {r["model"]: messages for r in results}
+        results = await _challenge_batch(
+            results,
+            per_model_messages,
+            stage="stage1",
+            content_key="response",
+            original_key="original_response",
+        )
+    return results
 
 
 async def debate_round1(
     user_query: str,
     mode_def: Dict,
+    deep_check: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """Architecture Debate round 1 — tier-balanced stances, parallel.
 
     Returns (results, stance_map). `results` is shaped like stage1 so the
     frontend can reuse the same renderer; each entry carries `stance` + `tier`.
+
+    When `deep_check` is True, each opening argument gets a stage-1 challenge
+    pass before round 2 begins.
     """
     stance_map = assign_stances(COUNCIL_MODELS)
     per_model_messages = {
@@ -174,6 +255,14 @@ async def debate_round1(
                 "tier": tier_for(model),
             }
         )
+    if deep_check and results:
+        results = await _challenge_batch(
+            results,
+            per_model_messages,
+            stage="stage1",
+            content_key="response",
+            original_key="original_response",
+        )
     return results, stance_map
 
 
@@ -182,8 +271,13 @@ async def debate_round2(
     mode_def: Dict,
     round1: List[Dict[str, Any]],
     stance_map: Dict[str, str],
+    deep_check: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Architecture Debate round 2 — each model rebuts the others."""
+    """Architecture Debate round 2 — each model rebuts the others.
+
+    When `deep_check` is True, each rebuttal also gets a stage-2 challenge
+    pass — same self-critique frame as cross-review, applied to the rebuttal.
+    """
     by_model = {r["model"]: r for r in round1}
 
     per_model_messages: Dict[str, List[Dict[str, str]]] = {}
@@ -216,6 +310,14 @@ async def debate_round2(
                 "stance": stance_map[model],
                 "tier": tier_for(model),
             }
+        )
+    if deep_check and results:
+        results = await _challenge_batch(
+            results,
+            per_model_messages,
+            stage="stage2",
+            content_key="response",
+            original_key="original_response",
         )
     return results
 
@@ -267,9 +369,13 @@ async def _stage2_cross_review(
     user_query: str,
     strategist_responses: List[Dict[str, Any]],
     builder_responses: List[Dict[str, Any]],
+    deep_check: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, str]]]:
     """Run the cross-review pattern: each strategist ranks the builders, each
     builder ranks the strategists. 6 parallel ranking calls total.
+
+    When `deep_check` is True, each ranking gets a stage-2 challenge pass
+    and the parsed ranking is re-derived from the revised text.
     """
     # Anonymize each team independently with labels A, B, C…
     builder_labels = [chr(65 + i) for i in range(len(builder_responses))]
@@ -323,6 +429,19 @@ async def _stage2_cross_review(
             }
         )
 
+    if deep_check and stage2_results:
+        def _reparse(entry: Dict[str, Any]) -> None:
+            entry["parsed_ranking"] = parse_ranking_from_text(entry["ranking"])
+
+        stage2_results = await _challenge_batch(
+            stage2_results,
+            per_model_messages,
+            stage="stage2",
+            content_key="ranking",
+            original_key="original_ranking",
+            extra=_reparse,
+        )
+
     label_to_model = {
         "builders": builders_label_to_model,
         "strategists": strategists_label_to_model,
@@ -333,6 +452,7 @@ async def _stage2_cross_review(
 async def _stage2_full_mesh(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
+    deep_check: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, str]]]:
     """Original full-mesh peer ranking — every model ranks all responses.
 
@@ -380,12 +500,28 @@ async def _stage2_full_mesh(
             }
         )
 
+    if deep_check and stage2_results:
+        per_model_messages = {r["model"]: messages for r in stage2_results}
+
+        def _reparse(entry: Dict[str, Any]) -> None:
+            entry["parsed_ranking"] = parse_ranking_from_text(entry["ranking"])
+
+        stage2_results = await _challenge_batch(
+            stage2_results,
+            per_model_messages,
+            stage="stage2",
+            content_key="ranking",
+            original_key="original_ranking",
+            extra=_reparse,
+        )
+
     return stage2_results, {"all": label_to_model}
 
 
 async def stage2_collect_rankings(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
+    deep_check: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, str]]]:
     """Stage 2: cross-team peer review.
 
@@ -396,13 +532,37 @@ async def stage2_collect_rankings(
     If one tier ended up empty (every model in it failed Stage 1), falls back
     to full-mesh ranking over the survivors and returns label_to_model as
     `{"all": {…}}`.
+
+    Passes `deep_check` down to the chosen sub-flow.
     """
     strategists = [r for r in stage1_results if tier_for(r["model"]) == "strategist"]
     builders = [r for r in stage1_results if tier_for(r["model"]) == "builder"]
 
     if strategists and builders:
-        return await _stage2_cross_review(user_query, strategists, builders)
-    return await _stage2_full_mesh(user_query, stage1_results)
+        return await _stage2_cross_review(user_query, strategists, builders, deep_check=deep_check)
+    return await _stage2_full_mesh(user_query, stage1_results, deep_check=deep_check)
+
+
+async def _challenge_stage3(
+    synthesis_result: Dict[str, Any],
+    original_messages: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    """Run a chairman self-challenge: same model, same context, revised verdict."""
+    initial = synthesis_result.get("response", "") or ""
+    revised = await challenge_response(
+        model=synthesis_result["model"],
+        original_messages=original_messages,
+        initial_response=initial,
+        stage="stage3",
+    )
+    if revised is None:
+        return {**synthesis_result, "challenged": False}
+    return {
+        **synthesis_result,
+        "original_response": initial,
+        "response": revised,
+        "challenged": True,
+    }
 
 
 async def stage3_synthesize_final(
@@ -410,8 +570,14 @@ async def stage3_synthesize_final(
     stage1_results: List[Dict[str, Any]],
     stage2_results: List[Dict[str, Any]],
     mode_def: Optional[Dict] = None,
+    deep_check: bool = False,
 ) -> Dict[str, Any]:
-    """Stage 3 (roles / free-chat): Chairman synthesizes with team grouping."""
+    """Stage 3 (roles / free-chat): Chairman synthesizes with team grouping.
+
+    When `deep_check` is True, the synthesis is fed back to the chairman with
+    a stage-3 challenge that specifically audits for dropped findings,
+    smoothed disagreements, and lens over-weighting.
+    """
 
     strategists = [r for r in stage1_results if tier_for(r["model"]) == "strategist"]
     builders = [r for r in stage1_results if tier_for(r["model"]) == "builder"]
@@ -512,13 +678,18 @@ The decisive answer to the user's question. Be specific. Don't hedge. Where the 
     response = await query_model(CHAIRMAN_MODEL, messages)
     if response is None:
         return {"model": CHAIRMAN_MODEL, "response": "Error: Unable to generate final synthesis."}
-    return {"model": CHAIRMAN_MODEL, "response": response.get("content", "")}
+
+    result = {"model": CHAIRMAN_MODEL, "response": response.get("content", "")}
+    if deep_check:
+        result = await _challenge_stage3(result, messages)
+    return result
 
 
 async def stage3_synthesize_debate(
     user_query: str,
     round1: List[Dict[str, Any]],
     round2: List[Dict[str, Any]],
+    deep_check: bool = False,
 ) -> Dict[str, Any]:
     """Stage 3 (debate): Chairman synthesizes the two debate rounds.
 
@@ -562,7 +733,11 @@ Then give a clear recommendation — not "it depends," but the decision you woul
     response = await query_model(CHAIRMAN_MODEL, messages)
     if response is None:
         return {"model": CHAIRMAN_MODEL, "response": "Error: Unable to generate final synthesis."}
-    return {"model": CHAIRMAN_MODEL, "response": response.get("content", "")}
+
+    result = {"model": CHAIRMAN_MODEL, "response": response.get("content", "")}
+    if deep_check:
+        result = await _challenge_stage3(result, messages)
+    return result
 
 
 def parse_ranking_from_text(ranking_text: str) -> List[str]:
@@ -653,6 +828,7 @@ Title:"""
 async def run_full_council(
     user_query: str,
     mode_key: Optional[str] = None,
+    deep_check: bool = False,
 ) -> Tuple[List, List, Dict, Dict]:
     """Run the complete 3-stage council process, mode-aware.
 
@@ -661,44 +837,58 @@ async def run_full_council(
 
     Debate mode: stage1 = round 1 (tier-balanced stances), stage2 = round 2
     rebuttals (NOT a ranking), stage3 = chairman verdict.
+
+    When `deep_check` is True, every model at every stage gets a stage-aware
+    self-challenge pass. Only the post-challenge text feeds into the next
+    stage. See backend/challenge.py for the prompts.
     """
     mode_def = get_mode(mode_key)
 
     # --- Architecture Debate branch ---
     if mode_def and mode_def.get("flow") == "debate":
-        round1, stance_map = await debate_round1(user_query, mode_def)
+        round1, stance_map = await debate_round1(user_query, mode_def, deep_check=deep_check)
         if not round1:
             return [], [], {"model": "error", "response": "All models failed in round 1."}, {
                 "mode": mode_key,
                 "flow": "debate",
+                "deep_check": deep_check,
             }
 
-        round2 = await debate_round2(user_query, mode_def, round1, stance_map)
-        stage3_result = await stage3_synthesize_debate(user_query, round1, round2)
+        round2 = await debate_round2(
+            user_query, mode_def, round1, stance_map, deep_check=deep_check
+        )
+        stage3_result = await stage3_synthesize_debate(
+            user_query, round1, round2, deep_check=deep_check
+        )
         metadata = {
             "mode": mode_key,
             "flow": "debate",
+            "deep_check": deep_check,
             "stance_map": stance_map,
         }
         return round1, round2, stage3_result, metadata
 
     # --- Roles & free-chat branch ---
-    stage1_results = await stage1_collect_responses(user_query, mode_def)
+    stage1_results = await stage1_collect_responses(user_query, mode_def, deep_check=deep_check)
     if not stage1_results:
         return [], [], {"model": "error", "response": "All models failed to respond. Please try again."}, {
             "mode": mode_key,
             "flow": (mode_def or {}).get("flow", "free"),
+            "deep_check": deep_check,
         }
 
-    stage2_results, label_to_model = await stage2_collect_rankings(user_query, stage1_results)
+    stage2_results, label_to_model = await stage2_collect_rankings(
+        user_query, stage1_results, deep_check=deep_check
+    )
     aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
     stage3_result = await stage3_synthesize_final(
-        user_query, stage1_results, stage2_results, mode_def
+        user_query, stage1_results, stage2_results, mode_def, deep_check=deep_check
     )
 
     metadata = {
         "mode": mode_key,
         "flow": (mode_def or {}).get("flow", "free"),
+        "deep_check": deep_check,
         "label_to_model": label_to_model,
         "aggregate_rankings": aggregate_rankings,
     }

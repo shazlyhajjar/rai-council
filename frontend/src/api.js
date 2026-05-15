@@ -137,8 +137,9 @@ export const api = {
    * @param {string} content - The message content
    * @param {string|null} mode - Operating mode key, or null for free chat
    * @param {string|null} attachment - Optional text/markdown context
+   * @param {boolean} deepCheck - Run Challenge Mode self-critique at every stage
    */
-  async sendMessage(conversationId, content, mode = null, attachment = null) {
+  async sendMessage(conversationId, content, mode = null, attachment = null, deepCheck = true) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message`,
       {
@@ -146,7 +147,7 @@ export const api = {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ content, mode, attachment }),
+        body: JSON.stringify({ content, mode, attachment, deep_check: deepCheck }),
       }
     );
     if (!response.ok) {
@@ -161,10 +162,11 @@ export const api = {
    * @param {string} content - The message content
    * @param {string|null} mode - Operating mode key, or null for free chat
    * @param {string|null} attachment - Optional text/markdown context
+   * @param {boolean} deepCheck - Run Challenge Mode self-critique at every stage
    * @param {function} onEvent - Callback function for each event: (eventType, data) => void
    * @returns {Promise<void>}
    */
-  async sendMessageStream(conversationId, content, mode, attachment, onEvent) {
+  async sendMessageStream(conversationId, content, mode, attachment, deepCheck, onEvent) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message/stream`,
       {
@@ -172,7 +174,7 @@ export const api = {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ content, mode, attachment }),
+        body: JSON.stringify({ content, mode, attachment, deep_check: deepCheck }),
       }
     );
 

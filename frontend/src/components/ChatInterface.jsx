@@ -14,6 +14,8 @@ export default function ChatInterface({
   isLoading,
   activeMode,
   onChangeMode,
+  deepCheck,
+  onChangeDeepCheck,
   onVerdictDecided,
 }) {
   const [input, setInput] = useState('');
@@ -71,6 +73,21 @@ export default function ChatInterface({
         ))}
       </select>
       <div className="mode-bar-description">{activeModeDef.description}</div>
+      <label
+        className={`challenge-toggle ${deepCheck ? 'is-on' : ''}`}
+        title="When ON, every model output at every stage is fed back to itself with a stage-aware challenge prompt before moving on. Roughly 2× latency and 2× API spend, but pushes past first-pass surface-level answers."
+      >
+        <input
+          type="checkbox"
+          checked={!!deepCheck}
+          onChange={(e) => onChangeDeepCheck?.(e.target.checked)}
+          disabled={isLoading}
+        />
+        <span className="challenge-toggle-text">
+          Challenge Mode
+          <span className="challenge-toggle-state">{deepCheck ? 'ON' : 'OFF'}</span>
+        </span>
+      </label>
       <ContextStatus />
     </div>
   );

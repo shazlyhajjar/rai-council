@@ -99,6 +99,10 @@ class SendMessageRequest(BaseModel):
     content: str
     mode: Optional[str] = None  # "spec_review" | "architecture_debate" | "code_review" | None
     attachment: Optional[str] = None  # Free-form text/markdown context pasted by the user
+    # Challenge Mode (Path A). True = every model output at every stage gets a
+    # stage-aware self-challenge pass before feeding forward. Default on per
+    # spec; the frontend exposes a toggle. False reproduces the v1 pipeline.
+    deep_check: bool = True
 
 
 def compose_council_input(content: str, attachment: Optional[str]) -> str:
@@ -271,6 +275,7 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
         council_input,
         mode_key=request.mode,
+        deep_check=request.deep_check,
     )
 
     # Log the verdict (only if we actually got a chairman synthesis).
@@ -323,6 +328,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
     mode_key = request.mode
     mode_def = get_mode(mode_key)
     flow = (mode_def or {}).get("flow", "free")
+    deep_check = request.deep_check
     council_input = compose_council_input(request.content, request.attachment)
 
     async def event_generator():
@@ -336,8 +342,9 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 attachment=request.attachment,
             )
 
-            # Announce the mode + flow up front so the UI can swap stage labels.
-            yield f"data: {json.dumps({'type': 'mode_start', 'mode': mode_key, 'flow': flow})}\n\n"
+            # Announce the mode + flow + challenge state up front so the UI
+            # can label spinners ("Running Stage 1 with Challenge Mode…").
+            yield f"data: {json.dumps({'type': 'mode_start', 'mode': mode_key, 'flow': flow, 'deep_check': deep_check})}\n\n"
 
             # Title comes from the question only — never the attachment.
             title_task = None
@@ -346,36 +353,37 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
             if flow == "debate":
                 yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-                round1, stance_map = await debate_round1(council_input, mode_def)
+                round1, stance_map = await debate_round1(council_input, mode_def, deep_check=deep_check)
                 yield f"data: {json.dumps({'type': 'stage1_complete', 'data': round1, 'metadata': {'stance_map': stance_map}})}\n\n"
 
                 yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-                round2 = await debate_round2(council_input, mode_def, round1, stance_map)
+                round2 = await debate_round2(council_input, mode_def, round1, stance_map, deep_check=deep_check)
                 yield f"data: {json.dumps({'type': 'stage2_complete', 'data': round2, 'metadata': {'stance_map': stance_map}})}\n\n"
 
                 yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-                stage3_result = await stage3_synthesize_debate(council_input, round1, round2)
+                stage3_result = await stage3_synthesize_debate(council_input, round1, round2, deep_check=deep_check)
                 yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
                 stage1_results, stage2_results = round1, round2
-                final_metadata = {"mode": mode_key, "flow": flow, "stance_map": stance_map}
+                final_metadata = {"mode": mode_key, "flow": flow, "deep_check": deep_check, "stance_map": stance_map}
             else:
                 yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-                stage1_results = await stage1_collect_responses(council_input, mode_def)
+                stage1_results = await stage1_collect_responses(council_input, mode_def, deep_check=deep_check)
                 yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
                 yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-                stage2_results, label_to_model = await stage2_collect_rankings(council_input, stage1_results)
+                stage2_results, label_to_model = await stage2_collect_rankings(council_input, stage1_results, deep_check=deep_check)
                 aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
                 yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
 
                 yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-                stage3_result = await stage3_synthesize_final(council_input, stage1_results, stage2_results, mode_def)
+                stage3_result = await stage3_synthesize_final(council_input, stage1_results, stage2_results, mode_def, deep_check=deep_check)
                 yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
                 final_metadata = {
                     "mode": mode_key,
                     "flow": flow,
+                    "deep_check": deep_check,
                     "label_to_model": label_to_model,
                     "aggregate_rankings": aggregate_rankings,
                 }

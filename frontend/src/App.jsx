@@ -7,6 +7,18 @@ import { api } from './api';
 import { DEFAULT_MODE_KEY } from './modes';
 import './App.css';
 
+const DEEP_CHECK_KEY = 'rai-council:deep-check';
+
+function readDeepCheckPref() {
+  try {
+    const stored = localStorage.getItem(DEEP_CHECK_KEY);
+    // Default ON (per spec); only "false" turns it off.
+    return stored === null ? true : stored !== 'false';
+  } catch {
+    return true;
+  }
+}
+
 function App() {
   const [conversations, setConversations] = useState([]);
   const [currentConversationId, setCurrentConversationId] = useState(null);
@@ -14,6 +26,16 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [activeMode, setActiveMode] = useState(DEFAULT_MODE_KEY);
   const [activeView, setActiveView] = useState('chat'); // 'chat' | 'history'
+  const [deepCheck, setDeepCheck] = useState(readDeepCheckPref);
+
+  // Persist Challenge Mode preference across sessions.
+  useEffect(() => {
+    try {
+      localStorage.setItem(DEEP_CHECK_KEY, String(deepCheck));
+    } catch {
+      /* localStorage unavailable — ignore */
+    }
+  }, [deepCheck]);
 
   // Load conversations on mount
   useEffect(() => {
@@ -88,6 +110,7 @@ function App() {
     if (!currentConversationId) return;
 
     const modeForThisMessage = activeMode;
+    const deepCheckForThisMessage = deepCheck;
 
     setIsLoading(true);
     try {
@@ -124,7 +147,7 @@ function App() {
       }));
 
       // Send message with streaming
-      await api.sendMessageStream(currentConversationId, content, modeForThisMessage, attachment, (eventType, event) => {
+      await api.sendMessageStream(currentConversationId, content, modeForThisMessage, attachment, deepCheckForThisMessage, (eventType, event) => {
         switch (eventType) {
           case 'mode_start':
             setCurrentConversation((prev) => {
@@ -261,6 +284,8 @@ function App() {
               isLoading={isLoading}
               activeMode={activeMode}
               onChangeMode={setActiveMode}
+              deepCheck={deepCheck}
+              onChangeDeepCheck={setDeepCheck}
               onVerdictDecided={handleVerdictDecided}
             />
           </>
